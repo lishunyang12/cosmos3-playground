@@ -52,7 +52,6 @@ KNOBS: list[dict[str, Any]] = [
      "step": 0.5, "video": True},
     {"key": "seed", "label": "Seed", "type": "int", "default": None, "min": 0, "max": 2**31 - 1},
     {"key": "generate_sound", "label": "Generate sound", "type": "bool", "default": False, "video": True},
-    {"key": "sound_duration", "label": "Sound duration (s)", "type": "number", "default": 5.0, "video": True},
 ]
 
 _MODE_BY_ID = {m["id"]: m for m in MODES}
@@ -103,9 +102,12 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
                 fields[key] = val
         if params.get("generate_sound"):
             fields["generate_sound"] = True
-            dur = _num(params, "sound_duration", float)
-            if dur is not None:
-                fields["sound_duration"] = dur
+            # match audio length to the video itself (num_frames / fps), as in the
+            # reference examples (189 frames @ 24 fps -> 7.875s) — no separate knob.
+            nf = _num(params, "num_frames", int)
+            fps = _num(params, "fps", int)
+            if nf and fps:
+                fields["sound_duration"] = round(nf / fps, 3)
 
     # mode-specific extras -> extra_params
     if mode_id == "v2v":
