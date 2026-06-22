@@ -108,7 +108,8 @@ export default function App() {
           return;
         }
         if (job.status === "failed") {
-          setError(job.error || "generation failed");
+          const e = job.error;
+          setError((e && (e.message || e.detail)) || (typeof e === "string" ? e : "generation failed"));
           setStatus("error");
           return;
         }

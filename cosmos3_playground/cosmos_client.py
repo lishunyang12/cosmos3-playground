@@ -39,9 +39,14 @@ class CosmosClient:
         return r.json()
 
     async def get_video(self, video_id: str) -> dict[str, Any]:
+        # A failed job returns HTTP 500 with a valid JSON body (status="failed", error=...).
+        # Return the body rather than raising, so the UI can surface the real error.
         r = await self._client.get(f"{self.base_url}/v1/videos/{video_id}")
-        r.raise_for_status()
-        return r.json()
+        try:
+            return r.json()
+        except ValueError:
+            r.raise_for_status()
+            raise
 
     async def stream_video_content(self, video_id: str) -> AsyncIterator[bytes]:
         async with self._client.stream("GET", f"{self.base_url}/v1/videos/{video_id}/content") as resp:
