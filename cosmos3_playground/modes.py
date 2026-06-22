@@ -209,13 +209,18 @@ def to_multipart_fields(req: dict[str, Any], model_name: str | None) -> dict[str
 
 # ------------------------------------------------------------------- reason requests
 def build_reason_messages(mode_id: str, params: dict[str, Any], media: bytes | None,
-                          media_name: str | None) -> dict[str, Any]:
+                          media_name: str | None, media_type: str | None = None) -> dict[str, Any]:
     """Build an OpenAI chat request for the REASON surface (media in -> text out)."""
     m = mode(mode_id)
     prompt = (params.get("prompt") or "").strip() or (m.get("example", {}).get("prompt") or "Describe this.")
     content: list[dict[str, Any]] = []
     if media is not None:
-        mime = mimetypes.guess_type(media_name or "")[0] or "application/octet-stream"
+        # prefer the upload's declared content-type; fall back to the filename, then the
+        # mode's expected reference kind — so a video is never mis-sent as an image.
+        mime = media_type if (media_type or "").startswith(("image", "video")) else None
+        mime = mime or mimetypes.guess_type(media_name or "")[0]
+        if not mime:
+            mime = "video/mp4" if m.get("reference") == "video" else "image/png"
         data_uri = f"data:{mime};base64," + base64.b64encode(media).decode()
         if mime.startswith("video"):
             content.append({"type": "video_url", "video_url": {"url": data_uri}})

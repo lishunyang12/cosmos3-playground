@@ -93,7 +93,11 @@ def create_app(
             if not reasoner.configured:
                 raise HTTPException(status_code=503, detail="reasoner not connected (start with --reasoner-url)")
             media = await reference.read() if reference is not None else None
-            payload = modes.build_reason_messages(mode, p, media, reference.filename if reference else None)
+            payload = modes.build_reason_messages(
+                mode, p, media,
+                reference.filename if reference else None,
+                reference.content_type if reference else None,
+            )
             try:
                 text = await reasoner.chat(payload)
             except httpx.HTTPError as err:
