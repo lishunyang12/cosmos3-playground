@@ -32,8 +32,8 @@ cosmos3_playground = "cosmos3_playground.plugin:register"
 
 [tool.hatch.build.targets.wheel]
 packages = ["cosmos3_playground"]
-# Ship the built React frontend (frontend/ is built into cosmos3_playground/static/).
-artifacts = ["cosmos3_playground/static/**"]
+# Ship the built React frontend + bundled example reference assets.
+artifacts = ["cosmos3_playground/static/**", "cosmos3_playground/examples/**"]
 
 [tool.ruff]
 line-length = 120

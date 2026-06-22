@@ -10,24 +10,56 @@ the request's ``extra_params``.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
+
+EXAMPLES_DIR = Path(__file__).parent / "examples"
+
+# Official recommended video settings (NVIDIA model card). 93 frames keeps the demo
+# snappy; bump to 189 for the full-length reference clip.
+_VIDEO_DEFAULTS = {
+    "size": "1280x720", "num_frames": 93, "fps": 24,
+    "num_inference_steps": 35, "guidance_scale": 6.0, "flow_shift": 10.0,
+}
+_IMAGE_DEFAULTS = {"size": "1024x1024", "num_inference_steps": 50, "guidance_scale": 7.0}
 
 # kind: "image" -> POST /v1/images/generations (sync, b64);
 #       "video" -> POST /v1/videos (async job) + GET /v1/videos/{id}/content
 # reference: what the user attaches (drives the upload widget)
 MODES: list[dict[str, Any]] = [
     {"id": "t2i", "label": "Text → Image", "group": "Imagine", "kind": "image", "reference": "none",
-     "blurb": "Generate a still image from a prompt."},
+     "blurb": "Generate a still image from a prompt.",
+     "example": {
+         "prompt": "A modern industrial robotic arm with a polished silver body cleaning a white ceramic "
+                   "plate in a bright kitchen, water droplets on the plate, photorealistic, sharp detail",
+         "params": _IMAGE_DEFAULTS, "reference": None,
+     }},
     {"id": "t2v", "label": "Text → Video", "group": "Imagine", "kind": "video", "reference": "none",
-     "blurb": "Imagine a video world from a prompt."},
+     "blurb": "Imagine a video world from a prompt.",
+     "example": {
+         "prompt": "A robotic arm in a bright kitchen picks up a green sponge and cleans a white plate, "
+                   "water glistening, smooth realistic motion, photorealistic. "
+                   "Audio description: soft servo whirs, gentle sponge-on-ceramic sounds, faint water drips.",
+         "params": _VIDEO_DEFAULTS, "reference": None,
+     }},
     {"id": "i2v", "label": "Image → Video", "group": "Animate", "kind": "video", "reference": "image",
-     "blurb": "Animate a still image into a video."},
+     "blurb": "Animate a still image into a video.",
+     "example": {
+         "prompt": "The scene comes to life with gentle, natural motion and a slow cinematic camera push-in, "
+                   "consistent lighting and detail.",
+         "params": _VIDEO_DEFAULTS, "reference": "i2v_input.jpg",
+     }},
     {"id": "v2v", "label": "Video → Video", "group": "Edit", "kind": "video", "reference": "video",
      "blurb": "Continue / re-imagine a reference video.",
      "extra": [
          {"key": "condition_video_keep", "label": "Keep", "type": "select",
           "options": ["first", "last"], "default": "first"},
-     ]},
+     ],
+     "example": {
+         "prompt": "Continue the scene with natural, physically plausible motion, preserving the style, "
+                   "lighting, and subjects, cinematic.",
+         "params": {**_VIDEO_DEFAULTS, "condition_video_keep": "first"}, "reference": "ref_video.mp4",
+     }},
     {"id": "transfer", "label": "Transfer (control)", "group": "Edit", "kind": "video", "reference": "video",
      "blurb": "Structure-guided generation (ControlNet-style) from a control video.",
      "extra": [
@@ -35,8 +67,23 @@ MODES: list[dict[str, Any]] = [
           "options": ["edge", "blur", "depth", "seg", "wsm"], "default": "edge"},
          {"key": "control_guidance", "label": "Control guidance", "type": "number", "default": 1.0,
           "min": 0.0, "max": 2.0, "step": 0.05},
-     ]},
+     ],
+     "example": {
+         "prompt": "A photorealistic video that follows the structure and motion of the control input, "
+                   "natural lighting, high detail.",
+         "params": {**_VIDEO_DEFAULTS, "control": "edge", "control_guidance": 1.0}, "reference": "ref_video.mp4",
+     }},
 ]
+
+
+def example_reference_path(mode_id: str) -> Path | None:
+    """Absolute path to a mode's bundled example reference asset, if any."""
+    mode = _MODE_BY_ID.get(mode_id)
+    ref = (mode or {}).get("example", {}).get("reference")
+    if not ref:
+        return None
+    path = EXAMPLES_DIR / ref
+    return path if path.is_file() else None
 
 # Common diffusion knobs (rendered by the frontend; video-only ones flagged).
 KNOBS: list[dict[str, Any]] = [

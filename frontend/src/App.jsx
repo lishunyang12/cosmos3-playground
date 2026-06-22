@@ -69,14 +69,25 @@ export default function App() {
 
   const mode = useMemo(() => config?.modes.find((m) => m.id === modeId), [config, modeId]);
 
-  // reset knob defaults when mode changes
+  // when mode changes, load that mode's official example: prompt + recommended
+  // settings + (if any) the bundled reference, so the user can just hit Generate.
   useEffect(() => {
     if (!config || !mode) return;
-    const next = { prompt: params.prompt || "" };
+    const ex = mode.example || {};
+    const next = { prompt: ex.prompt || "" };
     for (const k of config.knobs) if (k.default !== undefined) next[k.key] = k.default;
     for (const e of mode.extra || []) next[e.key] = e.default;
+    Object.assign(next, ex.params || {}); // official recommended values
     setParams(next);
     setRefFile(null);
+    setResult(null);
+    setError(null);
+    if (ex.reference) {
+      fetch(`/api/example/${mode.id}/reference`)
+        .then((r) => (r.ok ? r.blob() : null))
+        .then((b) => b && setRefFile(new File([b], ex.reference, { type: b.type })))
+        .catch(() => {});
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modeId, config]);
 

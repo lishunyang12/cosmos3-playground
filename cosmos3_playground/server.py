@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from cosmos3_playground import __version__, modes
@@ -100,6 +100,13 @@ def create_app(server_url: str, model: str | None = None, api_key: str = "EMPTY"
     @app.get("/api/jobs/{job_id}/content")
     async def job_content(job_id: str) -> StreamingResponse:
         return StreamingResponse(client.stream_video_content(job_id), media_type="video/mp4")
+
+    @app.get("/api/example/{mode_id}/reference")
+    async def example_reference(mode_id: str) -> FileResponse:
+        path = modes.example_reference_path(mode_id)
+        if path is None:
+            raise HTTPException(status_code=404, detail="no example reference for this mode")
+        return FileResponse(str(path))
 
     if STATIC_DIR.is_dir():
         app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
