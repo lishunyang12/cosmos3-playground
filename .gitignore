@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Built frontend (generated from frontend/ via `npm run build`)
+cosmos3_playground/static/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.local

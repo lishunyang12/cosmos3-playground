@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cosmos3-playground"
+version = "0.1.0"
+description = "Polished web playground (vLLM-Omni plugin) for NVIDIA Cosmos3 world-foundation models — text/image→video, video editing, sound."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "lishunyang12" }]
+keywords = ["vllm", "vllm-omni", "cosmos3", "diffusion", "video-generation", "playground"]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/lishunyang12/cosmos3-playground"
+Issues = "https://github.com/lishunyang12/cosmos3-playground/issues"
+
+# Console command to launch the playground.
+[project.scripts]
+cosmos3-playground = "cosmos3_playground.cli:main"
+
+# vLLM general-plugin entry point (import-light; only advertises availability).
+[project.entry-points."vllm.general_plugins"]
+cosmos3_playground = "cosmos3_playground.plugin:register"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cosmos3_playground"]
+# Ship the built React frontend (frontend/ is built into cosmos3_playground/static/).
+artifacts = ["cosmos3_playground/static/**"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
