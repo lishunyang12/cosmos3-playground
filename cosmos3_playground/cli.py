@@ -20,11 +20,18 @@ def main() -> None:
         help="Base URL of the vLLM-Omni server serving Cosmos3 (OpenAI-compatible).",
     )
     parser.add_argument("--model", default=None, help="Served model name (default: first from /v1/models).")
+    parser.add_argument(
+        "--reasoner-url",
+        default=None,
+        help="Base URL of an OpenAI-compatible vLLM reasoner server (Cosmos3 reasoner) for the "
+        "Reason surface (captioning, grounding, physical reasoning). Optional.",
+    )
+    parser.add_argument("--reasoner-model", default=None)
     parser.add_argument("--api-key", default="EMPTY")
     parser.add_argument("--version", action="version", version=f"cosmos3-playground {__version__}")
     args = parser.parse_args()
 
-    app = server.create_app(args.cosmos_url, args.model, args.api_key)
+    app = server.create_app(args.cosmos_url, args.model, args.reasoner_url, args.reasoner_model, args.api_key)
     print(f"Cosmos3 Playground {__version__} -> {args.cosmos_url}  (UI: http://{args.host}:{args.port})")
     uvicorn.run(app, host=args.host, port=args.port)
 

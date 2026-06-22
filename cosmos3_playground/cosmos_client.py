@@ -53,3 +53,33 @@ class CosmosClient:
             resp.raise_for_status()
             async for chunk in resp.aiter_bytes():
                 yield chunk
+
+
+class ReasonerClient:
+    """OpenAI-compatible chat client for the REASON surface (image/video -> text)."""
+
+    def __init__(self, base_url: str | None, api_key: str = "EMPTY", timeout: float = 300.0) -> None:
+        self.base_url = base_url.rstrip("/") if base_url else None
+        self._client = httpx.AsyncClient(timeout=timeout, headers={"authorization": f"Bearer {api_key}"})
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.base_url)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def models(self) -> list[str]:
+        if not self.base_url:
+            return []
+        r = await self._client.get(f"{self.base_url}/v1/models")
+        r.raise_for_status()
+        return [m["id"] for m in r.json().get("data", [])]
+
+    async def chat(self, payload: dict[str, Any]) -> str:
+        if not self.base_url:
+            raise RuntimeError("reasoner not configured (set --reasoner-url)")
+        r = await self._client.post(f"{self.base_url}/v1/chat/completions", json=payload)
+        r.raise_for_status()
+        data = r.json()
+        return (data.get("choices") or [{}])[0].get("message", {}).get("content", "")

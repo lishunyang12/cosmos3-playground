@@ -12,16 +12,26 @@ decoupled UI you point at it.
 
 ## What it gives you
 
-| Group | Modes | Endpoint |
-|---|---|---|
-| **Imagine** | Text → Image, Text → Video | `/v1/images/generations`, `/v1/videos` |
-| **Animate** | Image → Video | `/v1/videos` (+ image reference) |
-| **Edit** | Video → Video, Transfer (edge / blur / depth / seg / wsm control) | `/v1/videos` (+ video reference, `extra_params`) |
-| **Sound** | add muxed audio to any video mode (`generate_sound`) | `/v1/videos` |
+One unified interface over the two Cosmos3 surfaces from the official cookbook:
 
-Plus the core diffusion knobs (resolution, frames, fps, steps, guidance, flow-shift,
-negative prompt, seed), a live **progress bar** for async video jobs, and the server's
-profiling (inference time, peak VRAM) surfaced in the UI.
+**Generate** (diffusion → media), against a vLLM-Omni Cosmos3 server:
+| Group | Modes |
+|---|---|
+| **Imagine** | Text → Image, Text → Video |
+| **Animate** | Image → Video |
+| **Edit** | Video → Video, Transfer (edge / blur / depth / seg / wsm) |
+| **Simulate** | Forward dynamics (action → future video), Inverse dynamics (video → action trajectory) |
+| — | + **Generate sound** toggle (muxed AAC) on any video mode |
+
+**Reason** (world understanding → text), against an OpenAI-compatible vLLM reasoner:
+| Group | Modes |
+|---|---|
+| **Reason** | Captioning · Temporal localization · 2D grounding · Physical reasoning · Ask anything |
+
+Each mode **pre-loads its official example** (prompt + recommended settings + reference,
+sourced from the `nvidia/Cosmos3-Nano` model card) so you can just hit **Generate** /
+**Analyze**. Plus: live **progress bar** with ETA for async video jobs, an **action-tensor
+viewer** for dynamics, a **reference preview** (image/video), and server profiling.
 
 ## Architecture
 
@@ -39,21 +49,28 @@ so the same playground works for any vLLM-Omni diffusion model.
 
 ## Quick start
 
-**1. Serve Cosmos3 with vLLM-Omni** (separate process / GPU):
+**1. Serve Cosmos3 (Generate surface)** with vLLM-Omni:
 ```bash
-vllm serve nvidia/Cosmos3-Nano --omni --port 8000        # add --quantization fp8 for ~24GB GPUs
+vllm serve nvidia/Cosmos3-Nano --omni --port 8000 --no-guardrails   # +--quantization fp8 for ~24GB GPUs
 ```
+Note: video output writes to a storage dir — set `VLLM_OMNI_STORAGE_PATH=/some/writable/dir`
+if `/tmp/storage` isn't writable.
 
-**2. Install + run the playground:**
+**2. (Optional) Serve a reasoner (Reason surface)** — any OpenAI-compatible vLLM VLM:
 ```bash
-pip install -e .                 # installs the backend + the `cosmos3-playground` command
-# build the UI once (Node 18+):
-cd frontend && npm install && npm run build && cd ..
-cosmos3-playground --cosmos-url http://127.0.0.1:8000 --port 8800
+vllm serve <cosmos3-reasoner-or-any-VLM> --port 8001
 ```
-Open **http://localhost:8800**.
+The Reason surface is model-agnostic; point `--reasoner-url` at the Cosmos3 reasoner for
+true Cosmos reasoning, or any chat VLM. Omit it and the Reason tabs show "reasoner off".
 
-`--model` is optional (defaults to the first model from `/v1/models`).
+**3. Install + run the playground:**
+```bash
+pip install -e .
+cd frontend && npm install && npm run build && cd ..     # build the UI once (Node 18+)
+cosmos3-playground --cosmos-url http://127.0.0.1:8000 --reasoner-url http://127.0.0.1:8001 --port 8800
+```
+Open **http://localhost:8800**. `--model` / `--reasoner-model` are optional (default to the
+first model from each server's `/v1/models`).
 
 ## Development
 
@@ -76,10 +93,12 @@ out-of-process via the `cosmos3-playground` command against a running server.
 
 ## Roadmap
 
-- [x] Imagine / Animate / Edit / Sound
-- [ ] Simulate (action world-model: forward / inverse dynamics, policy) with action-tensor viewer
+- [x] Generate: Imagine / Animate / Edit / Sound
+- [x] Simulate: forward / inverse dynamics (action-tensor viewer)
+- [x] Reason: captioning / temporal localization / grounding / physical reasoning (decoupled reasoner)
 - [ ] Robot control loop (OpenPI WebSocket)
 - [ ] Cosmos3-Super multi-GPU presets, fp8 toggle surfaced in UI
+- [ ] Grounding box overlay on the reasoned image
 
 ## License
 
