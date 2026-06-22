@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getConfig, generate, getJob, jobContentUrl } from "./api.js";
 
+function fmt(sec) {
+  if (sec == null || isNaN(sec)) return "0s";
+  sec = Math.max(0, Math.round(sec));
+  return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, "0")}s`;
+}
+
 function Field({ spec, value, onChange }) {
   const t = spec.type;
   if (t === "bool") {
@@ -46,6 +52,7 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const pollRef = useRef(null);
+  const elapsedRef = useRef(null);
 
   useEffect(() => {
     getConfig()
@@ -54,7 +61,10 @@ export default function App() {
         setModeId(c.modes[0]?.id);
       })
       .catch((e) => setError(String(e)));
-    return () => clearTimeout(pollRef.current);
+    return () => {
+      clearTimeout(pollRef.current);
+      clearInterval(elapsedRef.current);
+    };
   }, []);
 
   const mode = useMemo(() => config?.modes.find((m) => m.id === modeId), [config, modeId]);
@@ -97,17 +107,35 @@ export default function App() {
   }
 
   function pollJob(jobId) {
-    setResult({ kind: "video", jobId, progress: 0, jobStatus: "queued" });
+    // Cosmos reports progress as 0 then 100, so estimate from elapsed time vs a
+    // self-calibrating per-unit cost (units = steps x frames), refined each run
+    // from the server's reported inference_time_s.
+    const units = (Number(params.num_inference_steps) || 35) * (Number(params.num_frames) || 93);
+    const secPerUnit = Number(localStorage.getItem("c3_spu")) || 0.04;
+    const estTotal = Math.max(6, secPerUnit * units);
+    const startTs = performance.now();
+
+    setResult({ kind: "video", jobId, jobStatus: "queued", elapsed: 0, estTotal, serverProgress: 0 });
+    clearInterval(elapsedRef.current);
+    elapsedRef.current = setInterval(() => {
+      setResult((r) => (r && r.kind === "video" ? { ...r, elapsed: (performance.now() - startTs) / 1000 } : r));
+    }, 300);
+
+    const stop = () => clearInterval(elapsedRef.current);
     const tick = async () => {
       try {
         const job = await getJob(jobId);
-        setResult((r) => ({ ...r, progress: job.progress ?? 0, jobStatus: job.status, action: job.action, profiling: job }));
+        setResult((r) => ({ ...r, jobStatus: job.status, serverProgress: job.progress || 0 }));
         if (job.status === "completed") {
-          setResult((r) => ({ ...r, src: jobContentUrl(jobId), action: job.action, profiling: job }));
+          stop();
+          const actual = job.inference_time_s || (performance.now() - startTs) / 1000;
+          if (units > 0 && actual > 0) localStorage.setItem("c3_spu", String(actual / units));
+          setResult((r) => ({ ...r, src: jobContentUrl(jobId), action: job.action, profiling: job, jobStatus: "completed" }));
           setStatus("done");
           return;
         }
         if (job.status === "failed") {
+          stop();
           const e = job.error;
           setError((e && (e.message || e.detail)) || (typeof e === "string" ? e : "generation failed"));
           setStatus("error");
@@ -115,6 +143,7 @@ export default function App() {
         }
         pollRef.current = setTimeout(tick, 1500);
       } catch (e) {
+        stop();
         setError(String(e.message || e));
         setStatus("error");
       }
@@ -212,12 +241,21 @@ export default function App() {
           {error && <div className="error">⚠ {error}</div>}
           {!result && !error && <div className="placeholder">Pick a mode, write a prompt, hit Generate.</div>}
 
-          {result?.kind === "video" && result.jobStatus !== "completed" && status === "running" && (
-            <div className="progress-wrap">
-              <div className="progress-bar"><div style={{ width: `${result.progress || 0}%` }} /></div>
-              <div className="progress-text">{result.jobStatus} · {Math.round(result.progress || 0)}%</div>
-            </div>
-          )}
+          {result?.kind === "video" && result.jobStatus !== "completed" && status === "running" && (() => {
+            const disp = result.serverProgress > 0
+              ? result.serverProgress
+              : Math.min(96, ((result.elapsed || 0) / (result.estTotal || 1)) * 100);
+            const eta = Math.max(0, (result.estTotal || 0) - (result.elapsed || 0));
+            return (
+              <div className="progress-wrap">
+                <div className="progress-bar"><div style={{ width: `${disp}%` }} /></div>
+                <div className="progress-text">
+                  {result.jobStatus} · {Math.round(disp)}% · {fmt(result.elapsed)} elapsed
+                  {result.serverProgress > 0 ? "" : ` · ~${fmt(eta)} left`}
+                </div>
+              </div>
+            );
+          })()}
 
           {result?.kind === "image" && result.src && <img className="media" src={result.src} alt="result" />}
           {result?.kind === "video" && result.src && (
