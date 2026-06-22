@@ -123,7 +123,7 @@ def create_app(
             job = await gen.create_video(modes.to_multipart_fields(req, app.state.model), ref)
             return JSONResponse({"kind": "video", "job_id": job.get("id"), "status": job.get("status"),
                                  "async_action": req.get("async_action", False)})
-        except httpx.HTTPError as err:
+        except (httpx.HTTPError, RuntimeError) as err:
             raise HTTPException(status_code=502, detail=f"cosmos server error: {err}") from err
 
     @app.get("/api/jobs/{job_id}")

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -30,12 +32,23 @@ class CosmosClient:
 
     async def create_video(self, fields: dict[str, str], reference: tuple[str, bytes, str] | None) -> dict[str, Any]:
         files = {}
+        data = dict(fields)
         if reference is not None:
-            filename, data, content_type = reference
-            files["input_reference"] = (filename, data, content_type)
-        # multipart when there's a file, else plain form fields
-        r = await self._client.post(f"{self.base_url}/v1/videos", data=fields, files=files or None)
-        r.raise_for_status()
+            filename, blob, content_type = reference
+            if (content_type or "").startswith("video"):
+                # this server accepts a video only via video_reference (a data URL),
+                # not via input_reference (which it validates as an image).
+                data_url = f"data:{content_type};base64," + base64.b64encode(blob).decode()
+                data["video_reference"] = json.dumps({"video_url": data_url})
+            else:
+                files["input_reference"] = (filename, blob, content_type)
+        r = await self._client.post(f"{self.base_url}/v1/videos", data=data, files=files or None)
+        if r.is_error:
+            try:
+                msg = (r.json().get("error") or {}).get("message") or r.text
+            except ValueError:
+                msg = r.text
+            raise RuntimeError(f"{r.status_code}: {msg}")
         return r.json()
 
     async def get_video(self, video_id: str) -> dict[str, Any]:
