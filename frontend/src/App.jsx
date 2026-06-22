@@ -93,6 +93,10 @@ export default function App() {
 
   const setParam = (k, v) => setParams((p) => ({ ...p, [k]: v }));
 
+  // object URL for previewing the attached reference (image or video)
+  const refUrl = useMemo(() => (refFile ? URL.createObjectURL(refFile) : null), [refFile]);
+  useEffect(() => () => refUrl && URL.revokeObjectURL(refUrl), [refUrl]);
+
   const visibleKnobs = useMemo(() => {
     if (!config || !mode) return [];
     return config.knobs.filter((k) => !(k.video && mode.kind !== "video"));
@@ -220,6 +224,11 @@ export default function App() {
                 onChange={(e) => setRefFile(e.target.files?.[0] || null)}
               />
               {refFile && <span className="ref-name">{refFile.name}</span>}
+              {refUrl && (mode.reference === "image" ? (
+                <img className="ref-preview" src={refUrl} alt="reference" />
+              ) : (
+                <video className="ref-preview" src={refUrl} controls muted loop />
+              ))}
             </label>
           )}
 

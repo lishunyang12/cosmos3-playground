@@ -66,6 +66,7 @@ textarea { resize: vertical; }
 
 .dropzone input[type=file] { font-size: 12px; }
 .ref-name { font-size: 12px; color: var(--accent-2); }
+.ref-preview { margin-top: 6px; width: 100%; max-height: 180px; object-fit: contain; border-radius: 10px; border: 1px solid var(--border); background: #000; }
 
 .section { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--panel-2); }
 .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 10px; }
