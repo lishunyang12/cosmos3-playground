@@ -130,7 +130,8 @@ export default function App() {
     const estTotal = Math.max(6, secPerUnit * units);
     const startTs = performance.now();
 
-    setResult({ kind: "video", jobId, jobStatus: "queued", elapsed: 0, estTotal, serverProgress: 0 });
+    const spec = `${params.size || "?"} · ${params.num_frames || "?"}f · ${params.num_inference_steps || "?"} steps`;
+    setResult({ kind: "video", jobId, jobStatus: "queued", elapsed: 0, estTotal, serverProgress: 0, spec, polls: 0 });
     clearInterval(elapsedRef.current);
     elapsedRef.current = setInterval(() => {
       setResult((r) => (r && r.kind === "video" ? { ...r, elapsed: (performance.now() - startTs) / 1000 } : r));
@@ -140,7 +141,7 @@ export default function App() {
     const tick = async () => {
       try {
         const job = await getJob(jobId);
-        setResult((r) => ({ ...r, jobStatus: job.status, serverProgress: job.progress || 0 }));
+        setResult((r) => ({ ...r, jobStatus: job.status, serverProgress: job.progress || 0, polls: (r.polls || 0) + 1 }));
         if (job.status === "completed") {
           stop();
           const actual = job.inference_time_s || (performance.now() - startTs) / 1000;
@@ -266,12 +267,16 @@ export default function App() {
               ? result.serverProgress
               : Math.min(96, ((result.elapsed || 0) / (result.estTotal || 1)) * 100);
             const eta = Math.max(0, (result.estTotal || 0) - (result.elapsed || 0));
+            const phase = { queued: "Queued", in_progress: "Generating video", running: "Generating video" }[result.jobStatus] || result.jobStatus;
             return (
               <div className="progress-wrap">
                 <div className="progress-bar"><div style={{ width: `${disp}%` }} /></div>
                 <div className="progress-text">
-                  {result.jobStatus} · {Math.round(disp)}% · {fmt(result.elapsed)} elapsed
-                  {result.serverProgress > 0 ? "" : ` · ~${fmt(eta)} left`}
+                  {phase} · {Math.round(disp)}% · {fmt(result.elapsed)} elapsed
+                  {result.serverProgress > 0 ? " (server)" : ` · ~${fmt(eta)} left`}
+                </div>
+                <div className="debug">
+                  status={result.jobStatus} · {result.spec} · job …{(result.jobId || "").slice(-8)} · poll #{result.polls || 0}
                 </div>
               </div>
             );
