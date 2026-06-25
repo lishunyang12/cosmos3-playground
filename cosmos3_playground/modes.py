@@ -15,108 +15,261 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import mimetypes
+import os
 from pathlib import Path
 from typing import Any
 
 EXAMPLES_DIR = Path(__file__).parent / "examples"
 
+# Sampling defaults follow the Cosmos 3 technical report, Table 21 ("Default sampling
+# configurations ... for each generator and generation modality"). Base generator
+# audio-visual: steps=50, guidance=6, shift=10, full-range CFG.
 _VIDEO_DEFAULTS = {
     "size": "1280x720", "num_frames": 93, "fps": 24,
-    "num_inference_steps": 35, "guidance_scale": 6.0, "flow_shift": 10.0,
+    "num_inference_steps": 50, "guidance_scale": 6.0, "flow_shift": 10.0,
 }
-_IMAGE_DEFAULTS = {"size": "1024x1024", "num_inference_steps": 50, "guidance_scale": 7.0}
-# Action / dynamics: low guidance, low flow-shift, small clips (model card).
-_ACTION_DEFAULTS = {"size": "832x480", "fps": 10, "num_inference_steps": 30, "guidance_scale": 1.0, "flow_shift": 5.0}
+# Image is the audio-visual model's still-frame mode → same guidance=6 as Table 21.
+_IMAGE_DEFAULTS = {"size": "1024x1024", "num_inference_steps": 50, "guidance_scale": 6.0}
+# Forward/inverse dynamics (Table 21): steps=50, guidance=1, shift=5, full-range CFG,
+# null negative prompt. Action envelope: 10-30 FPS, 16-400 frame horizon (§6.3.1).
+_ACTION_DEFAULTS = {"size": "832x480", "fps": 10, "num_inference_steps": 50, "guidance_scale": 1.0, "flow_shift": 5.0}
+
+# Default negative prompt for video generation, verbatim from the report's Appendix B.3
+# (the natural-language "DEFAULT NEGATIVE PROMPT"). Table 21 uses the null string for
+# Text2Image and for all action/dynamics modes, so only the video examples carry this.
+_NEG_VIDEO = (
+    "The video captures a series of frames showing macroblocking artifacts, chromatic "
+    "aberration, high-frequency noise, and rolling shutter distortion. It includes static "
+    "with no motion, motion blur, over-saturation, shaky footage, low resolution, grainy "
+    "texture, pixelated images, poorly lit areas, underexposed and overexposed scenes, poor "
+    "color balance, washed out colors, choppy sequences, jerky movements, low frame rate, "
+    "bit-depth compression artifacts, color banding, unnatural transitions, outdated special "
+    "effects, fake elements, unconvincing visuals, poorly edited content, jump cuts, hard cut, "
+    "visual noise, and flickering. It features moire patterns, edge halos, and temporal "
+    "aliasing. Furthermore, the content defies common sense, generating illogical scenarios, "
+    "nonsensical entities, absurd character behaviors, and conceptual paradoxes that violate "
+    "basic human reasoning and everyday reality. The video looks like a surreal or glitchy "
+    "hallucination. Overall, the video is of poor quality."
+)
+
+# Forward-dynamics example metadata — drives the Rollout control and the derived frame count.
+# Duration is bound to the action trajectory (1 frame per action step), so the user picks how
+# many chunks to roll out rather than a raw frame count.
+_FD_SPEC = json.loads((EXAMPLES_DIR / "fd_action_chunks.json").read_text())
+_FD_CHUNK = int(_FD_SPEC.get("action_chunk_size", 16))
+_FD_NCHUNKS = int(_FD_SPEC.get("num_chunks", len(_FD_SPEC.get("action_chunks", [[]]))))
 
 # ----------------------------------------------------------------------------- modes
 MODES: list[dict[str, Any]] = [
     # ---- GENERATE ----
-    {"id": "t2i", "label": "Text → Image", "surface": "generate", "group": "Imagine",
+    {"id": "t2i", "label": "Text → Image", "surface": "generate", "group": "Imagine", "primary": True,
      "kind": "image", "reference": "none", "blurb": "Generate a still image from a prompt.",
-     "example": {"prompt": "A modern industrial robotic arm with a polished silver body cleaning a white "
-                 "ceramic plate in a bright kitchen, photorealistic, sharp detail",
+     "io": "Prompt → image", "key_knobs": ["size", "guidance_scale"],
+     "example": {"prompt": "Photorealistic close-up of a brushed-titanium robotic hand with exposed servos "
+                 "gently cradling a fresh dewy strawberry, soft window light, razor-sharp focus on the fruit's "
+                 "seeds and the metal's micro-scratches, shallow depth of field, studio product photography",
                  "params": _IMAGE_DEFAULTS, "reference": None}},
-    {"id": "t2v", "label": "Text → Video", "surface": "generate", "group": "Imagine",
+    {"id": "t2v", "label": "Text → Video", "surface": "generate", "group": "Imagine", "primary": True,
      "kind": "video", "reference": "none", "blurb": "Imagine a video world from a prompt.",
-     "example": {"prompt": "A robotic arm in a bright kitchen picks up a green sponge and cleans a white plate, "
-                 "smooth realistic motion, photorealistic. Audio description: soft servo whirs, gentle "
-                 "sponge-on-ceramic sounds, faint water drips.", "params": _VIDEO_DEFAULTS, "reference": None}},
-    {"id": "i2v", "label": "Image → Video", "surface": "generate", "group": "Animate",
+     "io": "Prompt → video (with optional sound)", "key_knobs": ["size", "num_frames", "generate_sound"],
+     "example": {"prompt": "A lone surfer drops into a towering turquoise wave at golden hour; the lip throws "
+                 "over into a glassy barrel, offshore wind feathering spray off the crest, water rushing past "
+                 "with physically accurate fluid dynamics, cinematic tracking shot, photorealistic. Audio "
+                 "description: the deep roar of the breaking wave, the hiss of wind-blown spray, the board "
+                 "carving through water.",
+                 # sound defaults OFF: under a sequence-parallel (ulysses) deployment the
+                 # video+sound token count must be a multiple of ulysses_degree, which fails for
+                 # many frame counts. Video-only is always safe; sound is an opt-in toggle.
+                 "params": {**_VIDEO_DEFAULTS, "generate_sound": False, "negative_prompt": _NEG_VIDEO},
+                 "reference": None}},
+    {"id": "i2v", "label": "Image → Video", "surface": "generate", "group": "Animate", "primary": True,
      "kind": "video", "reference": "image", "blurb": "Animate a still image into a video.",
-     "example": {"prompt": "The scene comes to life with gentle, natural motion and a slow cinematic push-in.",
-                 "params": _VIDEO_DEFAULTS, "reference": "i2v_input.jpg"}},
+     "io": "Image + prompt → video", "key_knobs": ["num_frames"],
+     "example": {"prompt": "Bring the waterfall to life: water cascades over the rock face and splashes into the "
+                 "pool, the stream ripples over the mossy stones, ferns sway gently, fine mist drifts — natural, "
+                 "physically consistent motion, photorealistic.",
+                 "params": {**_VIDEO_DEFAULTS, "negative_prompt": _NEG_VIDEO}, "reference": "i2v_input.jpg"}},
     {"id": "v2v", "label": "Video → Video", "surface": "generate", "group": "Edit",
-     "kind": "video", "reference": "video", "blurb": "Continue / re-imagine a reference video.",
-     "extra": [{"key": "condition_video_keep", "label": "Keep", "type": "select",
-                "options": ["first", "last"], "default": "first"}],
-     "example": {"prompt": "Continue the scene with natural, physically plausible motion, preserving style.",
-                 "params": {**_VIDEO_DEFAULTS, "condition_video_keep": "first"}, "reference": "ref_video.mp4"}},
-    {"id": "transfer", "label": "Transfer (control)", "surface": "generate", "group": "Edit",
-     "kind": "video", "reference": "video", "blurb": "Structure-guided generation (ControlNet-style).",
-     "extra": [{"key": "control", "label": "Control", "type": "select",
-                "options": ["edge", "blur", "depth", "seg", "wsm"], "default": "edge"},
-               {"key": "control_guidance", "label": "Control guidance", "type": "number",
-                "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05}],
-     "example": {"prompt": "A photorealistic video that follows the structure and motion of the control input.",
-                 "params": {**_VIDEO_DEFAULTS, "control": "edge", "control_guidance": 1.0},
-                 "reference": "ref_video.mp4"}},
+     "kind": "video", "reference": "video", "blurb": "Future prediction: keep the opening frames, generate what happens next.",
+     "io": "Video (opening frames) + prompt → continuation", "key_knobs": ["num_frames"],
+     "purpose": "Predict the future of a clip — the model locks your opening frames as ground truth and "
+                "generates what comes next from the prompt. It's continuation, NOT a restyle. "
+                "(For “same structure, new look”, use Transfer.)",
+     "flow": {"inputs": ["opening frames", "prompt"], "output": "continued video"},
+     "notes": [["locks", "the opening frames (shown unchanged)"],
+               ["generates", "the continuation from your prompt"]],
+     "extra": [{"key": "condition_video_keep", "label": "Mode", "type": "select", "widget": "segmented",
+                "options": ["first", "last"], "default": "first",
+                "optionLabels": {"first": "predict from start", "last": "extend past end"},
+                "hint": "Conditions on only ~5 frames (2 latent) — a short clip is enough; no need for a long video."}],
+     "example": {"prompt": "A white robotic arm with black joints continues pouring a transparent liquid from a "
+                 "light-green pitcher into a glass holding a reddish-brown liquid and a spoon, on a clean white "
+                 "tabletop; the pour proceeds smoothly and the glass fills to a higher level, the gripper keeping "
+                 "the pitcher steady. Physically consistent motion, bright soft lighting, photorealistic.",
+                 "params": {**_VIDEO_DEFAULTS, "size": "1280x720", "num_frames": 93, "fps": 24,
+                            "condition_video_keep": "first", "negative_prompt": _NEG_VIDEO},
+                 "reference": "v2v_robot_pour.mp4"}},
+    {"id": "transfer", "label": "Transfer · Sim→Real", "surface": "generate", "group": "Edit",
+     "kind": "video", "reference": "video", "blurb": "Sim-to-real: turn a simulated / CG clip into a photorealistic video, keeping exact geometry & motion.",
+     "io": "Sim (or control) clip + prompt → photorealistic video", "key_knobs": [],
+     # length + aspect ratio are derived from the control clip automatically — not user knobs;
+     # transfer has no audio, so hide the sound toggle too.
+     "hide_knobs": ["num_frames", "fps", "size", "generate_sound"],
+     "purpose": "Take a low-fidelity simulation/render and make it photorealistic — same layout, objects and "
+                "motion, but real materials, textures and lighting. The core Physical-AI use: generate labeled, "
+                "photorealistic training data from sim (the geometry stays ground-truth-correct).",
+     "flow": {"inputs": ["sim/control clip", "prompt"], "output": "photorealistic video"},
+     "notes": [["keeps", "geometry · layout · motion (ground-truth)"],
+               ["changes", "materials · textures · lighting → photoreal"]],
+     # Only edge/blur can be derived on-the-fly from an RGB clip; depth/seg/wsm need a
+     # precomputed control-map video (control_path), which this playground doesn't generate.
+     "control_defaults": {"edge": 1.5, "blur": 1.5},
+     "extra": [{"key": "control", "label": "Control type", "type": "select", "widget": "segmented",
+                "options": ["edge", "blur"], "default": "edge"},
+               {"key": "control_guidance", "label": "Control strength", "type": "number", "widget": "slider",
+                "default": 1.5, "min": 0.0, "max": 3.0, "step": 0.05}],
+     "example": {"prompt": "In a sleek, high-end kitchen flooded with warm, diffused LED lighting, a bi-manual "
+                 "robot precisely grasps a shiny red apple from the center of a granite countertop. Around it, a "
+                 "cast-iron pan, a chrome toaster, and a decorative plant sit neatly arranged. As the robot lifts "
+                 "the fruit, it pivots gracefully and places the apple into a ceramic fruit bowl resting near the "
+                 "sink, where soft steam rises from a recently used kettle.",
+                 "params": {**_VIDEO_DEFAULTS, "size": "1280x720", "control": "edge", "control_guidance": 1.5,
+                            "guidance_scale": 5.0, "negative_prompt": _NEG_VIDEO},
+                 "reference": "transfer_sim_robot.mp4"}},
     {"id": "fwd_dynamics", "label": "Forward dynamics", "surface": "generate", "group": "Simulate",
      "kind": "video", "reference": "image", "blurb": "Action-conditioned future prediction: roll out a video "
-     "from a first frame + an action trajectory.",
-     "example": {"prompt": "Roll out the future given the action trajectory.",
-                 "params": _ACTION_DEFAULTS, "reference": "fd_first_frame.png", "action": "fd_action_chunks.json"}},
+     "from a first frame + an action trajectory.", "chunk_size": _FD_CHUNK,
+     "io": "First frame + action trajectory → video", "key_knobs": [],
+     "purpose": "Simulate the future — roll out a video from a first frame plus an action plan. "
+                "“press play on the physics.”",
+     "flow": {"inputs": ["first frame", "actions ▸▸"], "output": "predicted video"},
+     "notes": [["obeys", "physics & contact"],
+               ["driven by", "your action plan — pick how far to roll out"]],
+     # Duration = how much of the action trajectory you roll out (1 frame per action step). The Rollout
+     # control picks how many chunks to feed; num_frames is derived from it (chunk_size · n + 1).
+     "extra": [{"key": "rollout_chunks", "label": f"Rollout (×{_FD_CHUNK}-step chunks)", "type": "int",
+                "widget": "slider", "min": 1, "max": _FD_NCHUNKS, "step": 1, "default": _FD_NCHUNKS, "unit": "chunks"}],
+     "example": {"prompt": "Predict the future frames produced by executing the given action trajectory, with "
+                 "physically consistent contact and object motion.",
+                 "params": {**_ACTION_DEFAULTS, "size": "960x960", "rollout_chunks": 4},
+                 "reference": "fd_first_frame.png", "action": "fd_action_chunks.json"}},
     {"id": "inv_dynamics", "label": "Inverse dynamics", "surface": "generate", "group": "Simulate",
      "kind": "video", "reference": "video", "blurb": "Recover the ego-motion / action trajectory from a video.",
-     "example": {"prompt": "Recover the action trajectory from the video.",
+     "io": "Video → action trajectory (numbers, not a clip)", "key_knobs": [],
+     # The model's real output here is the action tensor, not a clip — tell the UI to surface the
+     # trajectory (numbers + plot) instead of the echoed reconstruction video.
+     "primary_output": "action",
+     "example": {"prompt": "Recover the per-frame ego-motion behind this driving clip — the camera's "
+                 "translation and rotation through the scene, frame by frame. The output is a 60×9 action "
+                 "trajectory, not a video.",
                  "params": {**_ACTION_DEFAULTS, "num_frames": 61}, "reference": "id_av_input.mp4"}},
+    {"id": "policy", "label": "Policy", "surface": "generate", "group": "Simulate",
+     "kind": "video", "reference": "image", "blurb": "Instruction-driven rollout: the model predicts its own "
+     "actions from a first frame + a language goal, and rolls out the video.", "chunk_size": _FD_CHUNK,
+     "io": "First frame + instruction → predicted actions + video",
+     "purpose": "Give it a goal, not a script — the model decides the actions itself and rolls them out, "
+                "chunk by chunk (autoregressive), so it can run long without a hand-authored action plan.",
+     "flow": {"inputs": ["first frame", "instruction"], "output": "actions + video"},
+     "notes": [["model decides", "the action trajectory"],
+               ["rolls out", "autoregressively — each chunk continues the last"]],
+     "extra": [{"key": "rollout_chunks", "label": f"Rollout (×{_FD_CHUNK}-step chunks, autoregressive)", "type": "int",
+                "widget": "slider", "min": 1, "max": 25, "step": 1, "default": 4, "unit": "chunks"}],
+     # Dedicated policy checkpoint Cosmos3-Nano-Policy-DROID: droid_lerobot domain, 8-D
+     # action, 640x480 @ 15 fps, 30 steps. First frame is a matching tabletop scene.
+     "example": {"prompt": "Pick up the object and place it in the bowl.",
+                 "params": {"size": "640x480", "fps": 15, "num_inference_steps": 50, "guidance_scale": 1.0,
+                            "flow_shift": 5.0, "domain_name": "droid_lerobot", "raw_action_dim": 8,
+                            "rollout_chunks": 4},
+                 "reference": "policy_first_frame.png", "action": "policy"}},
     # ---- REASON ----
-    {"id": "caption", "label": "Captioning", "surface": "reason", "group": "Reason",
+    {"id": "caption", "label": "Captioning", "surface": "reason", "group": "Reason", "primary": True,
      "kind": "text", "reference": "image", "blurb": "Detailed description of an image or video.",
-     "example": {"prompt": "Describe this scene in detail.", "params": {}, "reference": "reason_image.png"}},
+     "io": "Image / video → description", "key_knobs": ["max_tokens"],
+     "example": {"prompt": "Describe this scene in vivid, concrete detail — the objects and their materials, "
+                 "the spatial layout, the lighting, and any action taking place.",
+                 "params": {}, "reference": "reason_image.png"}},
     {"id": "temporal", "label": "Temporal localization", "surface": "reason", "group": "Reason",
      "kind": "text", "reference": "video", "blurb": "When does an event happen? (timestamps)",
-     "example": {"prompt": "Identify the key event in this video and report its start and end timestamps.",
+     "io": "Video → event timestamps", "key_knobs": ["max_tokens"],
+     "example": {"prompt": "Identify the key events in this video and report each one's start and end timestamps.",
                  "params": {}, "reference": "id_av_input.mp4"}},
     {"id": "grounding", "label": "2D grounding", "surface": "reason", "group": "Reason",
      "kind": "text", "reference": "image", "blurb": "Locate an object and return its 2D coordinates.",
-     "example": {"prompt": "Locate the main object in the image and return its 2D bounding box [x1,y1,x2,y2].",
-                 "params": {}, "reference": "reason_image.png"}},
+     "io": "Image → object bounding box", "key_knobs": ["max_tokens"],
+     "example": {"prompt": "Locate the dog in the image and return its 2D bounding box as [x1, y1, x2, y2].",
+                 "params": {}, "reference": "ground_input.jpg"}},
     {"id": "physical", "label": "Physical reasoning", "surface": "reason", "group": "Reason",
      "kind": "text", "reference": "video", "blurb": "Is what happens physically plausible?",
-     "example": {"prompt": "Is what happens in this video physically plausible? Explain your reasoning step by step.",
+     "io": "Video → plausibility analysis", "key_knobs": ["max_tokens"],
+     "example": {"prompt": "Examine the physics of this video. Is every motion physically plausible? Flag any "
+                 "violation of gravity, momentum, or contact dynamics and explain your reasoning step by step.",
                  "params": {}, "reference": "id_av_input.mp4"}},
-    {"id": "vqa", "label": "Ask anything", "surface": "reason", "group": "Reason",
+    {"id": "vqa", "label": "Ask anything", "surface": "reason", "group": "Reason", "primary": True,
      "kind": "text", "reference": "image", "blurb": "Free-form question about an image or video.",
-     "example": {"prompt": "What is happening in this image, and what might happen next?",
-                 "params": {}, "reference": "reason_image.png"}},
+     "io": "Image / video → answer", "key_knobs": ["max_tokens"],
+     "example": {"prompt": "What's on the plate, and what meal is this? List the food items and say whether it "
+                 "looks like a balanced meal.", "params": {}, "reference": "vqa_input.jpg"}},
 ]
 
 GEN_KNOBS: list[dict[str, Any]] = [
     {"key": "negative_prompt", "label": "Negative prompt", "type": "text", "default": ""},
-    {"key": "size", "label": "Resolution", "type": "select",
+    {"key": "size", "label": "Resolution", "type": "select", "widget": "segmented",
      "options": ["1280x720", "720x1280", "960x720", "720x960", "1024x1024", "832x480", "480x832"],
      "default": "1280x720"},
-    {"key": "num_frames", "label": "Frames", "type": "int", "default": 93, "min": 1, "max": 257, "video": True},
-    {"key": "fps", "label": "FPS", "type": "int", "default": 24, "min": 4, "max": 60, "video": True},
-    {"key": "num_inference_steps", "label": "Steps", "type": "int", "default": 35, "min": 1, "max": 100},
-    {"key": "guidance_scale", "label": "Guidance", "type": "number", "default": 6.0, "min": 0.0, "max": 20.0, "step": 0.5},
-    {"key": "flow_shift", "label": "Flow shift", "type": "number", "default": 10.0, "min": 0.0, "max": 20.0,
-     "step": 0.5, "video": True},
+    {"key": "num_frames", "label": "Length", "type": "int", "widget": "slider", "unit": "frames",
+     "default": 93, "min": 1, "max": 257, "step": 4, "video": True},
+    {"key": "fps", "label": "FPS", "type": "int", "widget": "slider", "default": 24, "min": 10, "max": 30, "video": True},
+    {"key": "num_inference_steps", "label": "Steps", "type": "int", "widget": "slider", "default": 50, "min": 1, "max": 100},
+    {"key": "guidance_scale", "label": "Guidance", "type": "number", "widget": "slider",
+     "default": 6.0, "min": 0.0, "max": 20.0, "step": 0.5},
+    {"key": "flow_shift", "label": "Flow shift", "type": "number", "widget": "slider",
+     "default": 10.0, "min": 0.0, "max": 20.0, "step": 0.5, "video": True},
     {"key": "seed", "label": "Seed", "type": "int", "default": None, "min": 0, "max": 2**31 - 1},
     {"key": "generate_sound", "label": "Generate sound", "type": "bool", "default": False, "video": True},
 ]
 
 REASON_KNOBS: list[dict[str, Any]] = [
-    {"key": "max_tokens", "label": "Max tokens", "type": "int", "default": 512, "min": 16, "max": 4096},
-    {"key": "temperature", "label": "Temperature", "type": "number", "default": 0.2, "min": 0.0, "max": 1.5, "step": 0.1},
+    {"key": "max_tokens", "label": "Answer length", "type": "int", "widget": "slider",
+     "default": 512, "min": 16, "max": 4096, "step": 16, "unit": "tokens"},
+    {"key": "temperature", "label": "Temperature", "type": "number", "widget": "slider",
+     "default": 0.2, "min": 0.0, "max": 1.5, "step": 0.1},
 ]
 
 _MODE_BY_ID = {m["id"]: m for m in MODES}
 
+# Action embodiment domains. ``domain_id`` mirrors vllm_omni cosmos3 action.py
+# (EMBODIMENT_TO_DOMAIN_ID); the rest is metadata the playground surfaces so an
+# explainability user reads the action *context*, not just opaque numbers. dims/fps
+# are filled only where we can verify them (av, agibotworld); null = not yet sourced.
+ACTION_DOMAINS: dict[str, dict[str, Any]] = {
+    "agibotworld": {"domain_id": 15, "kind": "bimanual robot manipulation",
+                    "raw_action_dim": 29, "fps": 10, "viewpoint": "wrist + two third-person views"},
+    "av": {"domain_id": 1, "kind": "ego-vehicle motion",
+           "raw_action_dim": 9, "fps": 10, "viewpoint": "front-facing camera"},
+    "droid_lerobot": {"domain_id": 8, "kind": "single-arm manipulation",
+                      "raw_action_dim": None, "fps": 15, "viewpoint": "third-person"},
+    "libero": {"domain_id": 5, "kind": "tabletop manipulation",
+               "raw_action_dim": None, "fps": None, "viewpoint": "third-person"},
+}
+
+
+def action_domain(name_or_id: Any) -> dict[str, Any] | None:
+    """Look up a domain by name or numeric id; returns metadata + name, or None."""
+    if name_or_id is None:
+        return None
+    if isinstance(name_or_id, str) and name_or_id in ACTION_DOMAINS:
+        return {"name": name_or_id, **ACTION_DOMAINS[name_or_id]}
+    for name, info in ACTION_DOMAINS.items():
+        if info["domain_id"] == name_or_id:
+            return {"name": name, **info}
+    return None
+
 
 def catalog() -> dict[str, Any]:
-    return {"modes": MODES, "gen_knobs": GEN_KNOBS, "reason_knobs": REASON_KNOBS}
+    return {"modes": MODES, "gen_knobs": GEN_KNOBS, "reason_knobs": REASON_KNOBS,
+            "action_domains": ACTION_DOMAINS}
 
 
 def mode(mode_id: str) -> dict[str, Any]:
@@ -162,6 +315,10 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
             fields[key] = val
 
     if m["kind"] == "video":
+        # honor the explicit size / frame-count / fps instead of letting the server rewrite the
+        # prompt from its resolution/duration templates (matches the official cookbook request).
+        extra_params["use_resolution_template"] = False
+        extra_params["use_duration_template"] = False
         for key, cast in (("num_frames", int), ("fps", int), ("flow_shift", float)):
             val = _num(params, key, cast)
             if val is not None:
@@ -170,7 +327,7 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
             fields["generate_sound"] = True
             nf, fps = _num(params, "num_frames", int), _num(params, "fps", int)
             if nf and fps:
-                fields["sound_duration"] = round(nf / fps, 3)
+                fields["sound_duration"] = _sound_duration_for_sp(params.get("size"), nf, nf / fps)
 
     if mode_id == "v2v":
         extra_params["condition_video_keep"] = params.get("condition_video_keep", "first")
@@ -180,20 +337,141 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
         cg = _num(params, "control_guidance", float)
         if cg is not None:
             extra_params["control_guidance"] = cg
+        # transfer requires a supported resolution bucket; derive it from the requested
+        # size's short side, otherwise the server falls back to an unsupported value.
+        buckets = (256, 480, 704, 720)
+        try:
+            w, h = (int(x) for x in (params.get("size") or "1280x720").lower().split("x"))
+            short = min(w, h)
+        except (ValueError, AttributeError):
+            short = 720
+        extra_params["resolution"] = min(buckets, key=lambda b: abs(b - short))
     elif mode_id == "fwd_dynamics":
-        spec = json.loads((EXAMPLES_DIR / "fd_action_chunks.json").read_text())
-        chunk_size = int(spec.get("action_chunk_size", 16))
-        extra_params.update({"action_mode": "forward_dynamics", "domain_name": spec.get("domain_name", "agibotworld"),
-                             "action_chunk_size": chunk_size, "action": spec["action_chunks"][0]})
-        fields["num_frames"] = chunk_size + 1
+        action = fd_action(params)
+        extra_params.update({"action_mode": "forward_dynamics",
+                             "domain_name": _FD_SPEC.get("domain_name", "agibotworld"),
+                             "action_chunk_size": len(action), "action": action})
+        fields["num_frames"] = len(action) + 1  # one frame per action step (+ the first frame)
     elif mode_id == "inv_dynamics":
-        extra_params.update({"action_mode": "inverse_dynamics", "domain_name": "av",
-                             "action_chunk_size": 60, "raw_action_dim": 9})
-        fields["num_frames"] = 61
+        # Defaults describe the standalone av example; a round-trip overrides domain/dims
+        # so inverse dynamics runs in the SAME domain as the forward-dynamics plan it checks.
+        chunk = int(params.get("action_chunk_size") or 60)
+        extra_params.update({"action_mode": "inverse_dynamics",
+                             "domain_name": params.get("domain_name") or "av",
+                             "action_chunk_size": chunk,
+                             "raw_action_dim": int(params.get("raw_action_dim") or 9)})
+        fields["num_frames"] = int(_num(params, "num_frames", int) or (chunk + 1))
 
     # forward/inverse dynamics read the action back from the async job, like the cookbook.
     return {"kind": m["kind"], "reference": m["reference"], "fields": fields, "extra_params": extra_params,
             "async_action": mode_id in ("fwd_dynamics", "inv_dynamics")}
+
+
+def fd_action(params: dict[str, Any]) -> list[list[float]]:
+    """The flat [T, D] action plan that forward dynamics rolls out for the given settings."""
+    all_chunks = _FD_SPEC["action_chunks"]
+    n = max(1, min(int(params.get("rollout_chunks") or 1), len(all_chunks)))
+    return [step for ch in all_chunks[:n] for step in ch]  # concatenate n chunks of actions
+
+
+def fd_chunk_count() -> int:
+    return len(_FD_SPEC.get("action_chunks", []))
+
+
+def fd_single_chunk_request(params: dict[str, Any], idx: int) -> dict[str, Any]:
+    """A forward-dynamics request for ONE action chunk — the unit of an autoregressive
+    rollout (each chunk is conditioned on the previous chunk's last frame)."""
+    chunk = _FD_SPEC["action_chunks"][idx]
+    prompt = (params.get("prompt") or mode("fwd_dynamics").get("example", {}).get("prompt") or ".").strip()
+    fields = {
+        "prompt": prompt or ".",
+        "size": params.get("size") or _ACTION_DEFAULTS["size"],
+        "fps": int(_num(params, "fps", int) or _FD_SPEC.get("fps") or _ACTION_DEFAULTS["fps"]),
+        "num_inference_steps": int(_num(params, "num_inference_steps", int) or _ACTION_DEFAULTS["num_inference_steps"]),
+        "guidance_scale": float(_num(params, "guidance_scale", float) or _ACTION_DEFAULTS["guidance_scale"]),
+        "flow_shift": float(_num(params, "flow_shift", float) or _ACTION_DEFAULTS["flow_shift"]),
+        "num_frames": len(chunk) + 1,
+    }
+    extra = {"use_resolution_template": False, "use_duration_template": False,
+             "action_mode": "forward_dynamics", "domain_name": _FD_SPEC.get("domain_name", "agibotworld"),
+             "action_chunk_size": len(chunk), "action": chunk}
+    return {"kind": "video", "reference": "image", "fields": fields, "extra_params": extra, "async_action": True}
+
+
+def policy_single_chunk_request(params: dict[str, Any]) -> dict[str, Any]:
+    """One policy chunk: the model PREDICTS a 16-step action from the first frame + the
+    instruction and rolls out 17 frames. Chained autoregressively for a long video."""
+    chunk = _FD_CHUNK
+    prompt = (params.get("prompt") or mode("policy").get("example", {}).get("prompt") or ".").strip()
+    fields = {
+        "prompt": prompt or ".",
+        "size": params.get("size") or _ACTION_DEFAULTS["size"],
+        "fps": int(_num(params, "fps", int) or _FD_SPEC.get("fps") or _ACTION_DEFAULTS["fps"]),
+        "num_inference_steps": int(_num(params, "num_inference_steps", int) or _ACTION_DEFAULTS["num_inference_steps"]),
+        "guidance_scale": float(_num(params, "guidance_scale", float) or _ACTION_DEFAULTS["guidance_scale"]),
+        "flow_shift": float(_num(params, "flow_shift", float) or _ACTION_DEFAULTS["flow_shift"]),
+        "num_frames": chunk + 1,
+    }
+    extra = {"use_resolution_template": False, "use_duration_template": False,
+             "action_mode": "policy", "domain_name": params.get("domain_name") or "droid_lerobot",
+             "raw_action_dim": int(params.get("raw_action_dim") or 8), "action_chunk_size": chunk}
+    return {"kind": "video", "reference": "image", "fields": fields, "extra_params": extra, "async_action": True}
+
+
+def roundtrip_id_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Build the inverse-dynamics request that re-reads the action out of a forward-dynamics
+    video, in the SAME domain as the forward plan — the recovered action is compared to the
+    original to score round-trip consistency."""
+    if mode_id != "fwd_dynamics":
+        raise ValueError(f"round-trip validation is only defined for forward dynamics, not '{mode_id}'")
+    action = fd_action(params)
+    chunk, dim = len(action), (len(action[0]) if action else 0)
+    id_params = {
+        "prompt": (params.get("prompt") or mode("inv_dynamics").get("example", {}).get("prompt") or "."),
+        "size": params.get("size") or _ACTION_DEFAULTS["size"],
+        "fps": params.get("fps") or _FD_SPEC.get("fps") or _ACTION_DEFAULTS["fps"],
+        "num_inference_steps": params.get("num_inference_steps") or _ACTION_DEFAULTS["num_inference_steps"],
+        "guidance_scale": params.get("guidance_scale") or _ACTION_DEFAULTS["guidance_scale"],
+        "flow_shift": params.get("flow_shift") or _ACTION_DEFAULTS["flow_shift"],
+        "domain_name": _FD_SPEC.get("domain_name", "agibotworld"),
+        "action_chunk_size": chunk, "raw_action_dim": dim, "num_frames": chunk + 1,
+    }
+    return build_request("inv_dynamics", id_params)
+
+
+def compare_actions(original: Any, recovered: Any) -> dict[str, Any]:
+    """Score how well a recovered [T, D] action matches the original plan. Pure-Python so it
+    has no numpy dependency. Headline is cosine similarity (stable for short horizons where
+    per-channel range can collapse to ~0 and blow up a normalized RMSE)."""
+    def as2d(a: Any) -> list[list[float]]:
+        while isinstance(a, list) and len(a) == 1 and a and isinstance(a[0], list) and a[0] \
+                and isinstance(a[0][0], list):
+            a = a[0]  # squeeze leading batch dims
+        return [[float(x) for x in row] for row in a]
+
+    A, B = as2d(original), as2d(recovered)
+    t = min(len(A), len(B))
+    if t == 0 or not A[0]:
+        return {"ok": False, "reason": "empty action"}
+    d = min(len(A[0]), len(B[0]))
+    A = [row[:d] for row in A[:t]]
+    B = [row[:d] for row in B[:t]]
+
+    abs_err = [[abs(A[i][j] - B[i][j]) for j in range(d)] for i in range(t)]
+    mae = sum(sum(r) for r in abs_err) / (t * d)
+    per_channel_mae = [sum(abs_err[i][j] for i in range(t)) / t for j in range(d)]
+
+    dot = sum(A[i][j] * B[i][j] for i in range(t) for j in range(d))
+    na = math.sqrt(sum(A[i][j] ** 2 for i in range(t) for j in range(d)))
+    nb = math.sqrt(sum(B[i][j] ** 2 for i in range(t) for j in range(d)))
+    cosine = dot / (na * nb) if na > 0 and nb > 0 else 0.0
+    return {
+        "ok": True, "shape": [t, d],
+        "cosine": round(cosine, 4),
+        "mae": round(mae, 4),
+        "consistency_pct": round(max(0.0, cosine) * 100, 1),
+        "per_channel_mae": [round(v, 4) for v in per_channel_mae],
+    }
 
 
 def to_multipart_fields(req: dict[str, Any], model_name: str | None) -> dict[str, str]:
@@ -205,6 +483,224 @@ def to_multipart_fields(req: dict[str, Any], model_name: str | None) -> dict[str
     if model_name:
         out["model"] = model_name
     return out
+
+
+# --------------------------------------------------------------- pipeline transparency
+def _summarize_request(req: dict[str, Any]) -> dict[str, Any]:
+    """JSON-safe view of a built request for the Pipeline panel — bulky action arrays
+    are replaced by a shape summary so the request stays readable."""
+    ep = dict(req.get("extra_params") or {})
+    act = ep.get("action")
+    if isinstance(act, list):
+        dim = len(act[0]) if act and isinstance(act[0], list) else None
+        ep["action"] = f"⟨{len(act)}×{dim} action array⟩" if dim else f"⟨{len(act)} action steps⟩"
+    return {"kind": req["kind"], "reference": req["reference"],
+            "async_action": req.get("async_action", False),
+            "fields": dict(req["fields"]), "extra_params": ep}
+
+
+def execution_stages(mode_id: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ordered stages a request runs through on the server, tagged with the
+    parallel dimensions that act on each stage (``dims`` keys map to the
+    deployment topology sizes the frontend reads from /api/config)."""
+    m = mode(mode_id)
+    if m["surface"] == "reason":
+        return [{"name": "Encode", "detail": "media + question → tokens", "dims": ["tp"]},
+                {"name": "LLM decode", "detail": "autoregressive answer", "dims": ["tp", "pp"]}]
+    stages: list[dict[str, Any]] = [{"name": "Text encode", "detail": "prompt → conditioning (cached)", "dims": ["tp"]}]
+    if mode_id == "i2v":
+        stages.append({"name": "Image encode", "detail": "first frame → latent", "dims": []})
+    elif mode_id in ("v2v", "transfer"):
+        stages.append({"name": "Video encode", "detail": "reference → latents", "dims": []})
+    elif mode_id == "inv_dynamics":
+        stages.append({"name": "Video encode", "detail": "input clip → latents", "dims": []})
+    steps = _num(params, "num_inference_steps", int) or 50
+    stages.append({"name": "Denoise", "detail": f"{steps} steps · DiT", "dims": ["cfg", "ulysses", "ring"]})
+    stages.append({"name": "VAE decode",
+                   "detail": "latent → image" if m["kind"] == "image" else "latents → frames",
+                   "dims": ["vae"]})
+    if params.get("generate_sound"):
+        stages.append({"name": "Sound decode", "detail": "latents → waveform", "dims": []})
+    if mode_id == "inv_dynamics":
+        stages.append({"name": "Action readout", "detail": "latents → [T×D] action", "dims": []})
+    return stages
+
+
+# Cosmos3 VAE/DiT factors (authoritative at runtime, mirrored here for offline shape
+# computation): spatial downsample 16, temporal compression 4, DiT latent patch 2,
+# audio latent rate 48000/1920 = 25 fps.
+_VAE_SPATIAL, _VAE_TEMPORAL, _DIT_PATCH, _SOUND_LATENT_FPS = 16, 4, 2, 25.0
+
+
+def _sound_duration_for_sp(size: Any, num_frames: int, duration: float) -> float:
+    """Pick a sound duration whose latent length makes the packed video+sound sequence
+    divisible by ulysses_degree, so video+sound runs under sequence parallelism without
+    the server's divisibility error. Adds at most a few audio-latent frames (~40 ms each)
+    beyond the requested duration; a no-op when SP is off. Mirrors the server-side fix."""
+    try:
+        uly = max(1, int(os.environ.get("COSMOS3_ULYSSES", "1") or 1))
+    except ValueError:
+        uly = 1
+    sound_frames = max(1, math.ceil(duration * _SOUND_LATENT_FPS))
+    if uly > 1:
+        vtok = _latent_shape(size, num_frames)["tokens"]
+        sound_frames += (-(vtok + sound_frames)) % uly
+        duration = sound_frames / _SOUND_LATENT_FPS
+    return round(duration, 4)
+
+
+def _latent_shape(size: Any, num_frames: int) -> dict[str, Any]:
+    try:
+        w, h = (int(x) for x in str(size or "1280x720").lower().split("x"))
+    except (ValueError, AttributeError):
+        w, h = 1280, 720
+    t_lat = (max(1, int(num_frames)) - 1) // _VAE_TEMPORAL + 1
+    h_lat, w_lat = max(1, h // _VAE_SPATIAL), max(1, w // _VAE_SPATIAL)
+    hp = -(-h_lat // _DIT_PATCH)
+    wp = -(-w_lat // _DIT_PATCH)
+    return {"px_h": h, "px_w": w, "t": t_lat, "h": h_lat, "w": w_lat, "tokens": t_lat * hp * wp}
+
+
+def execution_graph(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    """The request as a TensorBoard-style computation graph: op-typed nodes grouped into
+    namescopes, tensor shapes on the edges, and the classifier-free-guidance cond/uncond
+    branches expanded so the parallel structure (CFG split, USP shard) is explicit."""
+    m = mode(mode_id)
+    if m["surface"] == "reason":
+        return {"scopes": [{"id": "io", "label": "io"}, {"id": "vlm", "label": "Qwen3-VL"}],
+                "nodes": [
+                    {"id": "q", "label": "question", "op": "TextInput", "kind": "input", "scope": "io"},
+                    {"id": "media", "label": "media", "op": "ImageInput", "kind": "input", "scope": "io"},
+                    {"id": "enc", "label": "encode", "op": "vision_encode", "kind": "compute", "scope": "vlm", "dims": ["tp"]},
+                    {"id": "llm", "label": "decode", "op": "generate", "kind": "compute", "scope": "vlm", "dims": ["tp", "pp"]},
+                    {"id": "ans", "label": "answer", "op": "Text", "kind": "output", "scope": "io"},
+                ],
+                "edges": [{"from": "q", "to": "enc"}, {"from": "media", "to": "enc", "shape": "pixels"},
+                          {"from": "enc", "to": "llm", "shape": "tokens"}, {"from": "llm", "to": "ans", "shape": "text"}]}
+
+    steps = _num(params, "num_inference_steps", int) or 50
+    guidance = _num(params, "guidance_scale", float) or 1.0
+    lat = _latent_shape(params.get("size"), _num(params, "num_frames", int) or (1 if m["kind"] == "image" else 93))
+    z = f"{lat['t']}×{lat['h']}×{lat['w']}"            # latent grid C×T×H×W (channels omitted)
+    seq = f"{lat['tokens']}×d"                          # packed token sequence into the DiT
+    px = f"{lat['px_h']}×{lat['px_w']}"
+
+    L = "L"  # number of DiT blocks (symbolic)
+    scopes = [{"id": "inputs", "label": "inputs"}, {"id": "cond", "label": "conditioning"},
+              {"id": "denoise", "label": f"denoiser · {steps} steps"}, {"id": "decode", "label": "decode"},
+              {"id": "out", "label": "outputs"}]
+    nodes = [
+        {"id": "prompt", "label": "prompt", "op": "TextInput", "kind": "input", "scope": "inputs"},
+        {"id": "tok", "label": "tokenize", "op": "tokenizer", "kind": "compute", "scope": "cond"},
+        {"id": "text", "label": "text encode", "op": "Qwen-LM (UND)", "kind": "compute", "scope": "cond", "dims": ["tp"]},
+        {"id": "noise", "label": "noise", "op": "randn", "kind": "input", "scope": "inputs", "shape": z},
+        {"id": "patch", "label": "patchify", "op": "patchify", "kind": "compute", "scope": "denoise", "shape": seq},
+        {"id": "projin", "label": "proj_in", "op": "proj_in", "kind": "compute", "scope": "denoise", "shape": seq},
+    ]
+    edges = [
+        {"from": "prompt", "to": "tok", "shape": "text"},
+        {"from": "tok", "to": "text", "shape": "tokens"},
+        {"from": "noise", "to": "patch", "shape": z},
+        {"from": "patch", "to": "projin", "shape": seq},
+    ]
+
+    def _enc(node_id: str, in_id: str, in_label: str, into: list[str]) -> None:
+        # reference pixels → VAE encode → conditioning latents joining the DiT input
+        nodes.append({"id": in_id, "label": in_label, "op": "Input", "kind": "input", "scope": "inputs"})
+        nodes.append({"id": node_id, "label": "VAE encode", "op": "vae.encode", "kind": "compute", "scope": "cond"})
+        edges.append({"from": in_id, "to": node_id, "shape": "pixels"})
+        for tgt in into:
+            edges.append({"from": node_id, "to": tgt, "shape": "cond z"})
+
+    # one DiT step expanded into blocks; classifier-free guidance splits cond/uncond lanes.
+    cfg = guidance > 1.0
+    lanes = ["dit_c", "dit_u"] if cfg else ["dit"]
+    for lane in lanes:
+        tag = "cond" if lane == "dit_c" else ("uncond" if lane == "dit_u" else "")
+        nodes.append({"id": lane, "label": f"DiT block ×{L}" + (f" ({tag})" if tag else ""),
+                      "op": "cross-attn + self-attn + MLP", "kind": "compute", "scope": "denoise",
+                      "dims": ["ulysses", "ring"], "shape": seq})
+        edges.append({"from": "projin", "to": lane, "shape": seq})
+        edges.append({"from": "text", "to": lane, "shape": "K/V" if lane != "dit_u" else "K/V ∅"})
+    if cfg:
+        nodes.append({"id": "guide", "label": f"CFG combine ×{guidance:g}", "op": "apply_cfg",
+                      "kind": "compute", "scope": "denoise", "dims": ["cfg"], "shape": seq})
+        edges.append({"from": "dit_c", "to": "guide", "shape": "ε_c"})
+        edges.append({"from": "dit_u", "to": "guide", "shape": "ε_u"})
+    eps = "guide" if cfg else "dit"
+    nodes.append({"id": "step", "label": f"scheduler.step ×{steps}", "op": "rectified-flow step",
+                  "kind": "compute", "scope": "denoise", "shape": z})
+    edges.append({"from": eps, "to": "step", "shape": "ε"})
+
+    if mode_id == "i2v":
+        _enc("imgenc", "img", "first frame", lanes)
+    elif mode_id in ("v2v", "transfer"):
+        _enc("viden", "vid", "reference video", lanes)
+    elif mode_id == "inv_dynamics":
+        _enc("viden", "vid", "input clip", lanes)
+    elif mode_id == "fwd_dynamics":
+        _enc("imgenc", "img", "first frame", lanes)
+        nodes.append({"id": "act", "label": "action plan", "op": "ActionInput", "kind": "input", "scope": "inputs"})
+        nodes.append({"id": "actin", "label": "action_proj_in", "op": "action_proj_in", "kind": "compute", "scope": "cond"})
+        edges.append({"from": "act", "to": "actin", "shape": "T×D"})
+        for lane in lanes:
+            edges.append({"from": "actin", "to": lane, "shape": "act z"})
+
+    if mode_id == "inv_dynamics":
+        nodes.append({"id": "readout", "label": "action_proj_out", "op": "action_proj_out", "kind": "compute", "scope": "decode"})
+        nodes.append({"id": "aout", "label": "action", "op": "Output", "kind": "output", "scope": "out", "shape": "T×D"})
+        edges.extend([{"from": "step", "to": "readout", "shape": z}, {"from": "readout", "to": "aout", "shape": "T×D"}])
+    else:
+        nodes.append({"id": "projout", "label": "proj_out · unpatchify", "op": "proj_out + unpatchify", "kind": "compute", "scope": "decode", "shape": z})
+        nodes.append({"id": "vae", "label": "VAE decode", "op": "vae.decode", "kind": "compute", "scope": "decode", "dims": ["vae"]})
+        nodes.append({"id": "vout", "label": "image" if m["kind"] == "image" else "video", "op": "Output", "kind": "output", "scope": "out", "shape": px})
+        edges.extend([{"from": "step", "to": "projout", "shape": z}, {"from": "projout", "to": "vae", "shape": z},
+                      {"from": "vae", "to": "vout", "shape": px}])
+        if params.get("generate_sound"):
+            nodes.append({"id": "sndout", "label": "audio_proj_out", "op": "audio_proj_out", "kind": "compute", "scope": "decode"})
+            nodes.append({"id": "snd", "label": "sound decode", "op": "sound_vae.decode", "kind": "compute", "scope": "decode"})
+            nodes.append({"id": "sout", "label": "waveform", "op": "Output", "kind": "output", "scope": "out", "shape": "48kHz"})
+            edges.extend([{"from": "step", "to": "sndout", "shape": "audio z"}, {"from": "sndout", "to": "snd", "shape": "audio z"},
+                          {"from": "snd", "to": "sout", "shape": "48kHz"}])
+    return {"scopes": scopes, "nodes": nodes, "edges": edges}
+
+
+def request_preview(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Show exactly what the playground will send downstream for the current settings,
+    without running it — the core explainability hook for the Pipeline panel."""
+    m = mode(mode_id)
+    if m["surface"] == "reason":
+        return {"surface": "reason",
+                "prompt": (params.get("prompt") or m.get("example", {}).get("prompt") or ""),
+                "max_tokens": _num(params, "max_tokens", int) or 512,
+                "temperature": _num(params, "temperature", float),
+                "stages": execution_stages(mode_id, params),
+                "graph": execution_graph(mode_id, params)}
+    p = dict(params)
+    if not (p.get("prompt") or "").strip():
+        p["prompt"] = m.get("example", {}).get("prompt", "(your prompt)")
+    req = build_request(mode_id, p)
+    out = _summarize_request(req)
+    out["surface"] = "generate"
+    out["stages"] = execution_stages(mode_id, p)
+    out["graph"] = execution_graph(mode_id, p)
+    ep = req["extra_params"]
+    dom = action_domain(ep.get("domain_name", ep.get("domain_id")))
+    if dom:
+        out["domain"] = dom
+    return out
+
+
+def example_action(mode_id: str) -> dict[str, Any] | None:
+    """The action plan that drives forward dynamics, exposed for visualization."""
+    if mode_id != "fwd_dynamics":
+        return None
+    chunks = _FD_SPEC.get("action_chunks", [])
+    flat = [step for ch in chunks for step in ch]
+    return {"domain_name": _FD_SPEC.get("domain_name"), "fps": _FD_SPEC.get("fps"),
+            "action_chunk_size": _FD_CHUNK, "num_chunks": _FD_NCHUNKS,
+            "shape": [len(flat), len(flat[0]) if flat else 0], "data": flat,
+            "domain": action_domain(_FD_SPEC.get("domain_name"))}
 
 
 # ------------------------------------------------------------------- reason requests

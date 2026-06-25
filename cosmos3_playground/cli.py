@@ -28,10 +28,18 @@ def main() -> None:
     )
     parser.add_argument("--reasoner-model", default=None)
     parser.add_argument("--api-key", default="EMPTY")
+    parser.add_argument(
+        "--policy-url",
+        default=None,
+        help="Base URL of a dedicated policy checkpoint server (e.g. Cosmos3-Nano-Policy-DROID). "
+        "The Policy mode routes here; everything else stays on --cosmos-url. Optional.",
+    )
+    parser.add_argument("--policy-model", default=None)
     parser.add_argument("--version", action="version", version=f"cosmos3-playground {__version__}")
     args = parser.parse_args()
 
-    app = server.create_app(args.cosmos_url, args.model, args.reasoner_url, args.reasoner_model, args.api_key)
+    app = server.create_app(args.cosmos_url, args.model, args.reasoner_url, args.reasoner_model, args.api_key,
+                            args.policy_url, args.policy_model)
     print(f"Cosmos3 Playground {__version__} -> {args.cosmos_url}  (UI: http://{args.host}:{args.port})")
     uvicorn.run(app, host=args.host, port=args.port)
 
