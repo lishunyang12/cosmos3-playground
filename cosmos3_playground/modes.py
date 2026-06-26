@@ -388,7 +388,10 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
                              "domain_name": params.get("domain_name") or "av",
                              "action_chunk_size": chunk,
                              "raw_action_dim": int(params.get("raw_action_dim") or 9)})
-        fields["num_frames"] = int(_num(params, "num_frames", int) or (chunk + 1))
+        # The pipeline requires num_frames == chunk or chunk+1; ignore any leaked UI
+        # value (e.g. the hidden video knob's 93) that falls outside that range.
+        nf = _num(params, "num_frames", int)
+        fields["num_frames"] = nf if nf in (chunk, chunk + 1) else (chunk + 1)
     elif mode_id == "policy":
         # Single-shot planning policy (official AV example): the model predicts its own
         # action trajectory + rolls out the future drive. Runs on the base generator.
@@ -397,7 +400,9 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
                              "domain_name": params.get("domain_name") or "av",
                              "action_chunk_size": chunk,
                              "raw_action_dim": int(params.get("raw_action_dim") or 9)})
-        fields["num_frames"] = int(_num(params, "num_frames", int) or (chunk + 1))
+        # num_frames is fixed by the prediction horizon (first frame + chunk steps); the
+        # pipeline requires it to equal chunk or chunk+1, so ignore any leaked UI value.
+        fields["num_frames"] = chunk + 1
 
     # action modes read the predicted/echoed action back from the async job, like the cookbook.
     req = {"kind": m["kind"], "reference": m["reference"], "fields": fields, "extra_params": extra_params,
