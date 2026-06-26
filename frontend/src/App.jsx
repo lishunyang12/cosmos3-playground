@@ -20,6 +20,21 @@ function fmt(sec) {
 // Overlay the recovered/predicted ego-motion as an arrow drawn on the clip itself:
 // heading = direction of travel (lateral vs forward), length ∝ ‖motion‖ (speed),
 // redrawn each frame in sync with playback.
+// rot6d (two columns of R) -> small-angle rotation about each axis (yaw/pitch/roll).
+function rot6dRPY(r) {
+  const a1 = [+r[3], +r[4], +r[5]], a2 = [+r[6], +r[7], +r[8]];
+  const nrm = (v) => Math.hypot(v[0], v[1], v[2]) || 1e-9;
+  const sc = (v, s) => [v[0] * s, v[1] * s, v[2] * s];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const b1 = sc(a1, 1 / nrm(a1));
+  const t = [a2[0] - b1[0] * dot(b1, a2), a2[1] - b1[1] * dot(b1, a2), a2[2] - b1[2] * dot(b1, a2)];
+  const b2 = sc(t, 1 / nrm(t));
+  const b3 = [b1[1] * b2[2] - b1[2] * b2[1], b1[2] * b2[0] - b1[0] * b2[2], b1[0] * b2[1] - b1[1] * b2[0]];
+  // R columns = [b1 b2 b3]; skew part -> rotation vector about world x/y/z
+  const R = [[b1[0], b2[0], b3[0]], [b1[1], b2[1], b3[1]], [b1[2], b2[2], b3[2]]];
+  return { pitch: (R[2][1] - R[1][2]) / 2, yaw: (R[0][2] - R[2][0]) / 2, roll: (R[1][0] - R[0][1]) / 2 };
+}
+
 function EgoMotionOverlay({ action, videoUrl, fps }) {
   const shape = action.shape || [];
   const d = action.data;
@@ -28,12 +43,22 @@ function EgoMotionOverlay({ action, videoUrl, fps }) {
   if (Array.isArray(d) && Array.isArray(d[0])) rows = d;
   else if (Array.isArray(d)) for (let i = 0; i < d.length; i += cols) rows.push(d.slice(i, i + cols));
   const n = rows.length;
+  const hasRot = cols >= 9;
   const vref = useRef(null), cref = useRef(null);
-  const [hud, setHud] = useState({ fr: 0, x: 0, z: 0, mag: 0 });
-  const maxMag = useMemo(
-    () => Math.max(1e-6, ...rows.map((r) => Math.hypot(Number(r[0] || 0), Number(r[2] || 0)))),
-    [rows]
-  );
+  const [fcur, setFcur] = useState(0);
+
+  // Per-frame 6-DOF: translation (x,y,z) + rotation (yaw,pitch,roll); plus per-field abs-max for bar scaling.
+  const { comps, rmax } = useMemo(() => {
+    const comps = rows.map((r) => {
+      const x = +r[0] || 0, y = +r[1] || 0, z = +r[2] || 0;
+      const rot = hasRot ? rot6dRPY(r) : { yaw: 0, pitch: 0, roll: 0 };
+      return { x, y, z, ...rot };
+    });
+    const fields = ["z", "x", "y", "yaw", "pitch", "roll"];
+    const rmax = {}; fields.forEach((f) => { rmax[f] = Math.max(1e-6, ...comps.map((c) => Math.abs(c[f]))); });
+    return { comps, rmax };
+  }, [rows, hasRot]);
+
   useEffect(() => {
     let raf;
     const draw = () => {
@@ -41,17 +66,22 @@ function EgoMotionOverlay({ action, videoUrl, fps }) {
       if (v && c && c.clientWidth) {
         const W = (c.width = c.clientWidth), H = (c.height = c.clientHeight);
         const fr = Math.min(n - 1, Math.max(0, Math.round((v.currentTime || 0) * fps)));
-        const r = rows[fr] || [];
-        const x = Number(r[0] || 0), z = Number(r[2] || 0), mag = Math.hypot(x, z);
-        const phi = Math.atan2(x, Math.abs(z) < 1e-6 ? 1e-6 : z);
+        const m = comps[fr] || { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0 };
         const ctx = c.getContext("2d");
         ctx.clearRect(0, 0, W, H);
         const ox = W / 2, oy = H * 0.9;
-        const L = (0.12 + 0.55 * (mag / maxMag)) * H;
-        const tx = ox + Math.sin(phi) * L, ty = oy - Math.cos(phi) * L;
-        ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox, oy - 0.12 * H); ctx.stroke();
-        const hue = 140 - 140 * Math.min(1, mag / maxMag);
+        const spd = Math.abs(m.z) / rmax.z;                 // forward speed, 0..1
+        const tilt = Math.max(-1, Math.min(1, m.yaw / rmax.yaw)) * 0.9;  // yaw -> steering tilt (rad)
+        const L = (0.12 + 0.55 * spd) * H;
+        const tx = ox + Math.sin(tilt) * L, ty = oy - Math.cos(tilt) * L;
+        // roll'd horizon line through the ego point
+        const rollA = Math.max(-1, Math.min(1, m.roll / rmax.roll)) * 0.5;
+        ctx.strokeStyle = "rgba(255,255,255,0.28)"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(ox - Math.cos(rollA) * W * 0.16, oy + Math.sin(rollA) * W * 0.16);
+        ctx.lineTo(ox + Math.cos(rollA) * W * 0.16, oy - Math.sin(rollA) * W * 0.16); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox, oy - 0.12 * H); ctx.stroke();  // forward ref
+        // motion arrow: tilt = steering (yaw), length = forward speed, color = speed
+        const hue = 140 - 140 * Math.min(1, spd);
         ctx.strokeStyle = `hsl(${hue} 90% 55%)`; ctx.fillStyle = ctx.strokeStyle;
         ctx.lineWidth = Math.max(3, H * 0.014); ctx.lineCap = "round";
         ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(tx, ty); ctx.stroke();
@@ -60,40 +90,50 @@ function EgoMotionOverlay({ action, videoUrl, fps }) {
         ctx.lineTo(tx - ah * Math.cos(a - 0.42), ty - ah * Math.sin(a - 0.42));
         ctx.lineTo(tx - ah * Math.cos(a + 0.42), ty - ah * Math.sin(a + 0.42));
         ctx.closePath(); ctx.fill();
-        // in-frame annotations: a legend + the live value, so the arrow explains itself
-        const fs = Math.max(12, Math.round(H * 0.032));
+        const fs = Math.max(11, Math.round(H * 0.03));
         ctx.font = `${fs}px ui-sans-serif, system-ui, sans-serif`; ctx.textBaseline = "top";
-        const legend = "ego-motion → · length ∝ speed · dir = heading";
-        ctx.fillStyle = "rgba(0,0,0,0.45)"; ctx.fillRect(6, 6, ctx.measureText(legend).width + 14, fs + 10);
-        ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.fillText(legend, 13, 11);
         ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.fillText("forward", ox + 6, oy - 0.12 * H);
-        // speed value next to the arrow tip
-        const lbl = `speed ${mag.toFixed(3)}`;
-        ctx.font = `bold ${fs}px ui-sans-serif, system-ui, sans-serif`;
-        const lw = ctx.measureText(lbl).width, lx = Math.min(W - lw - 10, Math.max(6, tx + 8)), ly = Math.max(6, ty - fs - 6);
-        ctx.fillStyle = "rgba(0,0,0,0.45)"; ctx.fillRect(lx - 5, ly - 3, lw + 10, fs + 8);
-        ctx.fillStyle = `hsl(${hue} 90% 65%)`; ctx.fillText(lbl, lx, ly);
-        if (fr !== hud.fr) setHud({ fr, x, z, mag });
+        // legend: explain arrow + color
+        const legend = "arrow: tilt = steering (yaw) · length = forward speed · color = speed (green slow → red fast)";
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(6, 6, ctx.measureText(legend).width + 14, fs + 10);
+        ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.fillText(legend, 13, 11);
+        // 6-DOF gauge panel (top-right): every component, bipolar bar + live value
+        const G = [["fwd  z", m.z, rmax.z, 30], ["lat  x", m.x, rmax.x, 18], ["up   y", m.y, rmax.y, 50],
+                   ["yaw", m.yaw, rmax.yaw, 200], ["pitch", m.pitch, rmax.pitch, 175], ["roll", m.roll, rmax.roll, 270]];
+        const rowh = fs + 8, gw = Math.min(W * 0.4, 232), px = W - gw - 8, py = 8 + fs + 14;
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(px - 6, py - 5, gw + 12, rowh * 6 + 10);
+        const barX = px + 52, barW = gw - 112, cxg = barX + barW / 2;
+        G.forEach(([lab, val, rng, h], k) => {
+          const yk = py + k * rowh;
+          ctx.fillStyle = "rgba(230,230,235,0.9)"; ctx.fillText(lab, px, yk);
+          ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(cxg, yk + 1); ctx.lineTo(cxg, yk + fs - 1); ctx.stroke();   // zero line
+          const w = Math.max(-1, Math.min(1, val / rng)) * (barW / 2);
+          ctx.fillStyle = `hsl(${h} 75% 55%)`; ctx.fillRect(Math.min(cxg, cxg + w), yk + 2, Math.abs(w), fs - 4);
+          ctx.fillStyle = "rgba(230,230,235,0.85)"; ctx.fillText(val.toFixed(3), barX + barW + 8, yk);
+        });
+        if (fr !== fcur) setFcur(fr);
       }
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [rows, n, fps, maxMag, hud.fr]);
+  }, [comps, rmax, n, fps, fcur]);
 
   return (
     <div className="trajectory">
       <div className="traj-head">
         <span className="traj-title">Recovered ego-motion on the clip</span>
-        <span className="traj-meta">frame {hud.fr}/{n - 1}</span>
+        <span className="traj-meta">frame {fcur}/{n - 1}</span>
       </div>
       <div className="ego-wrap">
         <video ref={vref} className="ego-video" src={videoUrl} controls autoPlay loop muted playsInline />
         <canvas ref={cref} className="ego-ov" />
       </div>
       <div className="traj-cap">
-        arrow = recovered ego-motion · direction = heading (forward + lateral) · length ∝ ‖motion‖ (speed),
-        green→red · plays in sync · forward {hud.z.toFixed(3)} · lateral {hud.x.toFixed(3)} · ‖motion‖ {hud.mag.toFixed(3)}
+        All 6 DOF are shown live: the <b>arrow</b> = forward speed (length) + steering/yaw (tilt), color = speed;
+        the <b>gauge panel</b> = translation <b>z,x,y</b> + rotation <b>yaw,pitch,roll</b> (decoded from rot6d), each a
+        signed bar around zero. The faint line is the roll'd horizon.
       </div>
     </div>
   );
