@@ -60,6 +60,19 @@ function EgoMotionOverlay({ action, videoUrl, fps }) {
         ctx.lineTo(tx - ah * Math.cos(a - 0.42), ty - ah * Math.sin(a - 0.42));
         ctx.lineTo(tx - ah * Math.cos(a + 0.42), ty - ah * Math.sin(a + 0.42));
         ctx.closePath(); ctx.fill();
+        // in-frame annotations: a legend + the live value, so the arrow explains itself
+        const fs = Math.max(12, Math.round(H * 0.032));
+        ctx.font = `${fs}px ui-sans-serif, system-ui, sans-serif`; ctx.textBaseline = "top";
+        const legend = "ego-motion → · length ∝ speed · dir = heading";
+        ctx.fillStyle = "rgba(0,0,0,0.45)"; ctx.fillRect(6, 6, ctx.measureText(legend).width + 14, fs + 10);
+        ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.fillText(legend, 13, 11);
+        ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.fillText("forward", ox + 6, oy - 0.12 * H);
+        // speed value next to the arrow tip
+        const lbl = `speed ${mag.toFixed(3)}`;
+        ctx.font = `bold ${fs}px ui-sans-serif, system-ui, sans-serif`;
+        const lw = ctx.measureText(lbl).width, lx = Math.min(W - lw - 10, Math.max(6, tx + 8)), ly = Math.max(6, ty - fs - 6);
+        ctx.fillStyle = "rgba(0,0,0,0.45)"; ctx.fillRect(lx - 5, ly - 3, lw + 10, fs + 8);
+        ctx.fillStyle = `hsl(${hue} 90% 65%)`; ctx.fillText(lbl, lx, ly);
         if (fr !== hud.fr) setHud({ fr, x, z, mag });
       }
       raf = requestAnimationFrame(draw);
