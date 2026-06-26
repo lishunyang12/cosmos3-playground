@@ -150,8 +150,11 @@ def build_payload(mode: str, prompt: str, size: str, fps: int, num_frames: int,
             content = [{"type": "image_url", "image_url": {"url": image_data_url}}, {"type": "text", "text": text}]
         else:
             content = [{"type": "text", "text": text}]
+    # Deterministic upsampling (greedy + fixed seed): the framework default (temp 0.7) re-invents a
+    # different dense caption every call, which made the same prompt produce a completely different
+    # image each time. Greedy keeps the same prompt -> same caption -> reproducible generation.
     payload: dict[str, Any] = {"messages": [SYSTEM_MESSAGE, {"role": "user", "content": content}],
-                               "max_tokens": 8192, "temperature": 0.7, "top_p": 0.8}
+                               "max_tokens": 8192, "temperature": 0.0, "seed": 0}
     if model:
         payload["model"] = model
     return payload

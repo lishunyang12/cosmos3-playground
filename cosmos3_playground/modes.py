@@ -28,13 +28,14 @@ EXAMPLES_DIR = Path(__file__).parent / "examples"
 # audio-visual: steps=50, guidance=6, shift=10, full-range CFG.
 _VIDEO_DEFAULTS = {
     "size": "1280x720", "num_frames": 93, "fps": 24,
-    "num_inference_steps": 50, "guidance_scale": 6.0, "flow_shift": 10.0,
+    "num_inference_steps": 50, "guidance_scale": 6.0, "flow_shift": 10.0, "seed": 0,
 }
 # text2image paper defaults: steps 50, guidance 4.0 (shift 3.0 is the pipeline T2I default), 1:1 960x960.
-_IMAGE_DEFAULTS = {"size": "960x960", "num_inference_steps": 50, "guidance_scale": 4.0}
+# Fixed seed so the same prompt is reproducible (the backend otherwise picks a random seed each call).
+_IMAGE_DEFAULTS = {"size": "960x960", "num_inference_steps": 50, "guidance_scale": 4.0, "seed": 0}
 # Forward/inverse dynamics (Table 21): steps=50, guidance=1, shift=5, full-range CFG,
 # null negative prompt. Action envelope: 10-30 FPS, 16-400 frame horizon (§6.3.1).
-_ACTION_DEFAULTS = {"size": "832x480", "fps": 10, "num_inference_steps": 50, "guidance_scale": 1.0, "flow_shift": 5.0}
+_ACTION_DEFAULTS = {"size": "832x480", "fps": 10, "num_inference_steps": 50, "guidance_scale": 1.0, "flow_shift": 5.0, "seed": 0}
 
 # Action-mode prompt formatting — mirror cosmos-framework's ActionPromptJsonFormatter +
 # action.py so the checkpoints see their trained input distribution: the IMAGE system prompt
@@ -98,7 +99,7 @@ def _ex_prompt(name: str) -> str:
 #   text2video : steps 35, guidance 6.0, shift 10.0, 16:9 (1280x720), fps 24, 189 frames
 #   image2video: steps 35, guidance 6.0, shift 10.0, 16:9 (1280x720), fps 24, 189 frames
 _T2V_PAPER = {"size": "1280x720", "fps": 24, "num_inference_steps": 35, "guidance_scale": 6.0,
-              "flow_shift": 10.0, "num_frames": 189}
+              "flow_shift": 10.0, "num_frames": 189, "seed": 0}
 
 # ----------------------------------------------------------------------------- modes
 MODES: list[dict[str, Any]] = [
@@ -230,7 +231,7 @@ MODES: list[dict[str, Any]] = [
                  # user slider (default 90 = 6s @ 15fps); the action chunk is derived as num_frames - 1.
                  "params": {"size": "1280x720", "fps": 15, "num_inference_steps": 50, "guidance_scale": 6.0,
                             "flow_shift": 6.0, "domain_name": "bridge_orig_lerobot", "raw_action_dim": 10,
-                            "num_frames": 90},
+                            "num_frames": 90, "seed": 0},
                  "reference": "policy_robot_scene.png", "action": "policy"}},
     # ---- REASON ----
     {"id": "caption", "label": "Captioning", "surface": "reason", "group": "Reason", "primary": True,
