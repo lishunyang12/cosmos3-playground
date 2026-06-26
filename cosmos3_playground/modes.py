@@ -201,9 +201,11 @@ MODES: list[dict[str, Any]] = [
      "purpose": "Turn perception into action — give the robot a goal, not a script, and the same omnimodal "
                 "backbone follows the instruction: from one camera frame it predicts a 16-step manipulation "
                 "trajectory and rolls out the resulting arm motion.",
-     "flow": {"inputs": ["first frame", "instruction"], "output": "predicted manipulation + actions"},
-     "notes": [["model decides", "the 16-step action trajectory"],
-               ["rolls out", "the predicted manipulation (single shot)"]],
+     "flow": {"inputs": ["first frame", "instruction"], "output": "predicted manipulation video"},
+     "notes": [["model decides", "its own 16-step action chunks"],
+               ["rolls out", "autoregressively — each chunk continues the last (longer = fuller task)"]],
+     "extra": [{"key": "rollout_chunks", "label": "Rollout (×16-step chunks, autoregressive)", "type": "int",
+                "widget": "slider", "min": 1, "max": 8, "step": 1, "default": 4, "unit": "chunks"}],
      # Official robot policy example (cosmos-framework inputs/omni/action_policy_robot.json): bridge_orig_lerobot
      # domain, ego_view, 10-D action (pos+rot6d+gripper), image_size 480 (640x480), 5 fps, 16-step chunk.
      # Runs on the base generator. First frame is the official bridge clip's opening frame.
@@ -499,20 +501,20 @@ def fd_single_chunk_request(params: dict[str, Any], idx: int) -> dict[str, Any]:
 def policy_single_chunk_request(params: dict[str, Any]) -> dict[str, Any]:
     """One policy chunk: the model PREDICTS a 16-step action from the first frame + the
     instruction and rolls out 17 frames. Chained autoregressively for a long video."""
-    chunk = _FD_CHUNK
+    chunk = int(params.get("action_chunk_size") or _FD_CHUNK)
     prompt = (params.get("prompt") or mode("policy").get("example", {}).get("prompt") or ".").strip()
     fields = {
         "prompt": prompt or ".",
         "size": params.get("size") or _ACTION_DEFAULTS["size"],
-        "fps": int(_num(params, "fps", int) or _FD_SPEC.get("fps") or _ACTION_DEFAULTS["fps"]),
+        "fps": int(_num(params, "fps", int) or _ACTION_DEFAULTS["fps"]),
         "num_inference_steps": int(_num(params, "num_inference_steps", int) or _ACTION_DEFAULTS["num_inference_steps"]),
         "guidance_scale": float(_num(params, "guidance_scale", float) or _ACTION_DEFAULTS["guidance_scale"]),
         "flow_shift": float(_num(params, "flow_shift", float) or _ACTION_DEFAULTS["flow_shift"]),
         "num_frames": chunk + 1,
     }
     extra = {"use_resolution_template": False, "use_duration_template": False,
-             "action_mode": "policy", "domain_name": params.get("domain_name") or "droid_lerobot",
-             "raw_action_dim": int(params.get("raw_action_dim") or 8), "action_chunk_size": chunk}
+             "action_mode": "policy", "domain_name": params.get("domain_name") or "bridge_orig_lerobot",
+             "raw_action_dim": int(params.get("raw_action_dim") or 10), "action_chunk_size": chunk}
     return _apply_action_prompt_format(
         {"kind": "video", "reference": "image", "fields": fields, "extra_params": extra, "async_action": True})
 

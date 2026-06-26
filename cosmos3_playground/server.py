@@ -217,8 +217,10 @@ def create_app(
             frame_lists = []
             prev_video: bytes | None = None
             fps = 10
-            client = policy_gen if mode == "policy" else gen
-            model_name = app.state.policy_model if mode == "policy" else app.state.model
+            # The robot (bridge) policy runs on the base generator, like forward dynamics;
+            # the dedicated DROID checkpoint (policy_gen) is not used by the current example.
+            client = gen
+            model_name = app.state.model
             for i in range(n):
                 st["chunk"] = i + 1
                 # policy predicts its own actions each chunk; forward dynamics replays chunk i.
@@ -248,8 +250,8 @@ def create_app(
                             reference: UploadFile | None = None) -> dict[str, Any]:
         """Start an autoregressive forward-dynamics rollout: generate one action chunk at a
         time, conditioning each on the previous chunk's last frame, then stitch the clips."""
-        if mode != "fwd_dynamics":
-            raise HTTPException(status_code=400, detail="rollout is only for forward dynamics")
+        if mode not in ("fwd_dynamics", "policy"):
+            raise HTTPException(status_code=400, detail="rollout is only for forward dynamics or policy")
         if reference is None:
             raise HTTPException(status_code=400, detail="rollout needs a first-frame image")
         try:
