@@ -5,7 +5,7 @@ A polished web **playground** for NVIDIA **Cosmos3** world-foundation models, se
 the model runs in your vLLM-Omni server (OpenAI-compatible), and this playground is a
 decoupled UI you point at it.
 
-![Uploading image.png…]()
+<img width="1875" height="870" alt="image" src="https://github.com/user-attachments/assets/6b40f8e3-8122-4c29-90db-d26a122ad94d" />
 
 
 > Imagine → animate → edit → hear a world, from one model. Cosmos3 picks the task per
