@@ -208,12 +208,12 @@ MODES: list[dict[str, Any]] = [
      # "pick up the red apple…", "move the blue mug…", "stack the blocks…". bridge_orig_lerobot embodiment,
      # 10-D action (pos+rot6d+gripper), 5 fps, single 32-step chunk. Runs on the base generator.
      "example": {"prompt": "Pick up the red apple and place it on the plate.",
-                 # guidance 3.0 (CFG) sharpens the HD rollout (~+20% detail). fps 15 (3x the bridge default,
-                 # within the 10-30 action envelope) gives smooth playback; 60-step chunk (~4s @ 15fps, 61
-                 # frames) stays coherent — past ~90 frames the rollout starts to drift.
+                 # guidance 3.0 (CFG) sharpens the HD rollout (~+20% detail). fps 15 = smooth playback.
+                 # 149-step chunk → 150 frames ≈ 10s, the full action horizon (720p cap is 200 frames);
+                 # verified coherent end-to-end. Trade-off: a 10s 720p rollout takes ~100s to generate.
                  "params": {"size": "1280x720", "fps": 15, "num_inference_steps": 50, "guidance_scale": 3.0,
                             "flow_shift": 5.0, "domain_name": "bridge_orig_lerobot", "raw_action_dim": 10,
-                            "action_chunk_size": 60},
+                            "action_chunk_size": 149},
                  "reference": "policy_robot_scene.png", "action": "policy"}},
     # ---- REASON ----
     {"id": "caption", "label": "Captioning", "surface": "reason", "group": "Reason", "primary": True,
