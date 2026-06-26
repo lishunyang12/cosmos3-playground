@@ -926,7 +926,11 @@ export default function App() {
   // forward dynamics derives its frame count from the rollout selection (chunk_size · n + 1).
   const frames = mode?.id === "fwd_dynamics"
     ? (mode.chunk_size || 16) * (Number(params.rollout_chunks) || 1) + 1
-    : params.num_frames;
+    // policy / inverse dynamics derive frame count from the action chunk (server forces chunk+1),
+    // not the hidden num_frames knob — show the real count.
+    : (mode?.id === "policy" || mode?.id === "inv_dynamics")
+      ? (Number(params.action_chunk_size) || 0) + 1
+      : params.num_frames;
   const specLine = isReason
     ? `${params.max_tokens || 512} tokens · temp ${params.temperature ?? 0.2}`
     : mode?.id === "transfer"

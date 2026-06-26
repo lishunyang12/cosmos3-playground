@@ -211,8 +211,8 @@ MODES: list[dict[str, Any]] = [
                  # guidance 3.0 (CFG) sharpens the HD rollout (~+20% detail). fps 15 = smooth playback.
                  # 149-step chunk → 150 frames ≈ 10s, the full action horizon (720p cap is 200 frames);
                  # verified coherent end-to-end. Trade-off: a 10s 720p rollout takes ~100s to generate.
-                 "params": {"size": "1280x720", "fps": 15, "num_inference_steps": 50, "guidance_scale": 3.0,
-                            "flow_shift": 5.0, "domain_name": "bridge_orig_lerobot", "raw_action_dim": 10,
+                 "params": {"size": "1280x720", "fps": 15, "num_inference_steps": 50, "guidance_scale": 6.0,
+                            "flow_shift": 6.0, "domain_name": "bridge_orig_lerobot", "raw_action_dim": 10,
                             "action_chunk_size": 149},
                  "reference": "policy_robot_scene.png", "action": "policy"}},
     # ---- REASON ----
