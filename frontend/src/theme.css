@@ -433,6 +433,25 @@ h3.md-h { font-size: 18px; } h4.md-h { font-size: 16px; } h5.md-h, h6.md-h { fon
 .traj-foot a { color: var(--accent-strong); text-decoration: none; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
 .traj-foot a:hover { text-decoration: underline; }
 
+/* ---- animated per-channel action dashboard ---- */
+.traj-transport { display: flex; align-items: center; gap: 10px; margin: 2px 0 4px; }
+.traj-play { width: 30px; height: 26px; border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 11px; line-height: 1; }
+.traj-play:hover { border-color: var(--accent-strong); color: var(--accent-strong); }
+.traj-scrub { flex: 1; accent-color: var(--accent-strong); cursor: pointer; }
+.traj-tcount { font-family: var(--font-mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.traj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
+.traj-cell { background: var(--panel-2); border-radius: var(--r-sm); padding: 4px 6px; }
+.traj-cell-head { display: flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.traj-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.traj-cell-val { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; }
+.traj-spark { width: 100%; height: 38px; display: block; }
+.traj-cursor { stroke: var(--text); stroke-width: 1; opacity: 0.45; vector-effect: non-scaling-stroke; }
+.traj-heat-wrap { margin-top: 2px; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+.traj-heat { display: grid; grid-auto-rows: 9px; gap: 0; }
+.traj-hc { width: 100%; height: 9px; }
+.traj-hc.on { filter: brightness(1.7); box-shadow: inset 0 0 0 9999px rgba(255,255,255,0.12); }
+
 /* ---- round-trip validation (forward -> inverse consistency) ---- */
 .validation {
   width: 100%; margin-top: 14px; display: flex; flex-direction: column; gap: 10px; padding: 14px;

@@ -26,16 +26,47 @@ function ActionTrajectory({ action, title }) {
   else if (Array.isArray(d)) for (let i = 0; i < d.length; i += cols) rows.push(d.slice(i, i + cols));
   const n = rows.length;
 
-  // per-step L2 magnitude — the overall motion profile over time
-  const mags = rows.map((r) => Math.sqrt(r.reduce((s, x) => s + Number(x) ** 2, 0)));
-  const W = 520, H = 60, pad = 4;
-  const hi = Math.max(...mags, 1e-6), lo = Math.min(...mags, 0);
-  const pts = mags.map((m, i) => {
-    const x = pad + (i / Math.max(1, n - 1)) * (W - 2 * pad);
-    const y = H - pad - ((m - lo) / Math.max(1e-6, hi - lo)) * (H - 2 * pad);
+  // Playback fps (the action-plan view stuffs "N fps" into dtype); default to a calm 12.
+  const fps = (() => { const m = /([\d.]+)\s*fps/.exec(String(action.dtype || "")); return m ? Number(m[1]) : 12; })();
+
+  const [t, setT] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const rafRef = useRef(0); const accRef = useRef(0); const lastRef = useRef(0);
+
+  useEffect(() => { setT(0); setPlaying(false); }, [n, action.action_mode, action.domain_id]);
+  useEffect(() => {
+    if (!playing || n <= 1) return;
+    const step = 1000 / Math.max(1, fps);
+    lastRef.current = performance.now(); accRef.current = 0;
+    const tick = (now) => {
+      accRef.current += now - lastRef.current; lastRef.current = now;
+      if (accRef.current >= step) {
+        const adv = Math.floor(accRef.current / step); accRef.current -= adv * step;
+        setT((prev) => { const nx = prev + adv; if (nx >= n - 1) { setPlaying(false); return n - 1; } return nx; });
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [playing, n, fps]);
+
+  // Per-dimension min/max so each channel gets its own visible scale.
+  const stats = useMemo(() => {
+    const mn = Array(cols).fill(Infinity), mx = Array(cols).fill(-Infinity);
+    for (const r of rows) for (let j = 0; j < cols; j++) { const v = Number(r[j]); if (v < mn[j]) mn[j] = v; if (v > mx[j]) mx[j] = v; }
+    return { mn, mx };
+  }, [rows, cols]);
+
+  const SW = 150, SH = 38, sp = 3;
+  const hue = (j) => Math.round((j / Math.max(1, cols)) * 310);
+  const norm = (v, j) => (Number(v) - stats.mn[j]) / Math.max(1e-9, stats.mx[j] - stats.mn[j]);
+  const sparkPts = (j) => rows.map((r, i) => {
+    const x = sp + (i / Math.max(1, n - 1)) * (SW - 2 * sp);
+    const y = SH - sp - norm(r[j], j) * (SH - 2 * sp);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(" ");
-  const preview = rows.slice(0, 14);
+  const cx = sp + (t / Math.max(1, n - 1)) * (SW - 2 * sp);
+  const cur = rows[Math.min(t, n - 1)] || [];
 
   function download() {
     const payload = { shape, dtype: action.dtype, action_mode: action.action_mode, domain_id: action.domain_id, data: rows };
@@ -48,26 +79,47 @@ function ActionTrajectory({ action, title }) {
   return (
     <div className="trajectory">
       <div className="traj-head">
-        <span className="traj-title">{title || (action.action_mode === "inverse_dynamics" ? "Recovered action trajectory (model output)" : "Action plan (input)")}</span>
+        <span className="traj-title">{title || (action.action_mode === "inverse_dynamics" ? "Recovered ego-motion (model output)" : "Action trajectory")}</span>
         <span className="traj-meta">{shape.join(" × ")} · domain {action.domain_id}</span>
       </div>
-      <svg className="sparkline" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
-        <polyline points={pts} fill="none" />
-      </svg>
-      <div className="traj-cap">curve = per-step motion magnitude ‖aₜ‖ over {n} steps · table = raw action value per dimension</div>
-      <div className="traj-table-wrap">
-        <table className="traj-table">
-          <thead><tr><th>t</th>{Array.from({ length: cols }, (_, i) => <th key={i}>d{i}</th>)}</tr></thead>
-          <tbody>
-            {preview.map((r, i) => (
-              <tr key={i}><td className="t">{i}</td>{r.map((x, j) => <td key={j}>{Number(x).toFixed(3)}</td>)}</tr>
-            ))}
-          </tbody>
-        </table>
+
+      <div className="traj-transport">
+        <button className="traj-play" type="button" aria-label={playing ? "pause" : "play"}
+          onClick={() => { if (t >= n - 1) setT(0); setPlaying((p) => !p); }}>{playing ? "❚❚" : "▶"}</button>
+        <input className="traj-scrub" type="range" min={0} max={Math.max(0, n - 1)} value={t}
+          onChange={(e) => { setPlaying(false); setT(Number(e.target.value)); }} />
+        <span className="traj-tcount">t&nbsp;{t}/{n - 1}</span>
       </div>
-      <div className="traj-foot">
-        showing {preview.length} of {n} steps · <a onClick={download}><IconDownload /> full trajectory (JSON)</a>
+
+      <div className="traj-grid">
+        {Array.from({ length: cols }, (_, j) => (
+          <div className="traj-cell" key={j}>
+            <div className="traj-cell-head">
+              <span className="traj-dot" style={{ background: `hsl(${hue(j)} 70% 55%)` }} />d{j}
+              <span className="traj-cell-val">{Number(cur[j] ?? 0).toFixed(3)}</span>
+            </div>
+            <svg className="traj-spark" viewBox={`0 0 ${SW} ${SH}`} preserveAspectRatio="none">
+              <polyline points={sparkPts(j)} fill="none" stroke={`hsl(${hue(j)} 70% 55%)`} strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
+              <line className="traj-cursor" x1={cx} y1="0" x2={cx} y2={SH} />
+              <circle cx={cx} cy={SH - sp - norm(cur[j] ?? stats.mn[j], j) * (SH - 2 * sp)} r="2.6" fill={`hsl(${hue(j)} 85% 62%)`} />
+            </svg>
+          </div>
+        ))}
       </div>
+
+      <div className="traj-heat-wrap">
+        <div className="traj-heat" style={{ gridTemplateColumns: `repeat(${n}, 1fr)` }}>
+          {Array.from({ length: cols }, (_, j) =>
+            rows.map((r, i) => (
+              <div key={`${j}-${i}`} className={"traj-hc" + (i === t ? " on" : "")}
+                style={{ background: `hsl(${hue(j)} 68% ${18 + norm(r[j], j) * 58}%)` }} />
+            ))
+          )}
+        </div>
+      </div>
+
+      <div className="traj-cap">{cols} action dims × {n} steps · ▶ sweeps the cursor across every channel · heatmap: rows = dims, columns = time</div>
+      <div className="traj-foot"><a onClick={download}><IconDownload /> full trajectory (JSON)</a></div>
     </div>
   );
 }
