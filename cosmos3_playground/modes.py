@@ -30,29 +30,44 @@ _VIDEO_DEFAULTS = {
     "size": "1280x720", "num_frames": 93, "fps": 24,
     "num_inference_steps": 50, "guidance_scale": 6.0, "flow_shift": 10.0,
 }
-# Image is the audio-visual model's still-frame mode → same guidance=6 as Table 21.
-_IMAGE_DEFAULTS = {"size": "1024x1024", "num_inference_steps": 50, "guidance_scale": 6.0}
+# text2image paper defaults: steps 50, guidance 4.0 (shift 3.0 is the pipeline T2I default), 1:1 960x960.
+_IMAGE_DEFAULTS = {"size": "960x960", "num_inference_steps": 50, "guidance_scale": 4.0}
 # Forward/inverse dynamics (Table 21): steps=50, guidance=1, shift=5, full-range CFG,
 # null negative prompt. Action envelope: 10-30 FPS, 16-400 frame horizon (§6.3.1).
 _ACTION_DEFAULTS = {"size": "832x480", "fps": 10, "num_inference_steps": 50, "guidance_scale": 1.0, "flow_shift": 5.0}
 
-# Default negative prompt for video generation, verbatim from the report's Appendix B.3
-# (the natural-language "DEFAULT NEGATIVE PROMPT"). Table 21 uses the null string for
-# Text2Image and for all action/dynamics modes, so only the video examples carry this.
-_NEG_VIDEO = (
-    "The video captures a series of frames showing macroblocking artifacts, chromatic "
-    "aberration, high-frequency noise, and rolling shutter distortion. It includes static "
-    "with no motion, motion blur, over-saturation, shaky footage, low resolution, grainy "
-    "texture, pixelated images, poorly lit areas, underexposed and overexposed scenes, poor "
-    "color balance, washed out colors, choppy sequences, jerky movements, low frame rate, "
-    "bit-depth compression artifacts, color banding, unnatural transitions, outdated special "
-    "effects, fake elements, unconvincing visuals, poorly edited content, jump cuts, hard cut, "
-    "visual noise, and flickering. It features moire patterns, edge halos, and temporal "
-    "aliasing. Furthermore, the content defies common sense, generating illogical scenarios, "
-    "nonsensical entities, absurd character behaviors, and conceptual paradoxes that violate "
-    "basic human reasoning and everyday reality. The video looks like a surreal or glitchy "
-    "hallucination. Overall, the video is of poor quality."
-)
+# Action-mode prompt formatting — mirror cosmos-framework's ActionPromptJsonFormatter +
+# action.py so the checkpoints see their trained input distribution: the IMAGE system prompt
+# (is_video=False for action modes) plus a structured JSON caption with the per-domain
+# viewpoint framing. Verified to give a more stable, on-distribution policy rollout than raw
+# free text. The system-prompt string is verbatim from the framework (trained typo "give").
+_ACTION_SYSTEM_PROMPT = "You are a helpful assistant who will generate images from a give prompt."
+_VIEWPOINT_TEMPLATES = {
+    "ego_view": "This video is captured from a first-person perspective looking at the scene.",
+    "third_person_view": "This video is captured from a third-person perspective looking towards the agent from the front.",
+    "wrist_view": "This video is captured from a wrist-mounted camera.",
+    "concat_view": "This video contains concatenated views from multiple camera perspectives.",
+}
+# Canonical viewpoint per embodiment domain (from the cosmos-framework action datasets).
+_DOMAIN_VIEWPOINT = {"droid_lerobot": "concat_view", "av": "ego_view",
+                     "agibotworld": "concat_view", "bridge_orig_lerobot": "ego_view"}
+# Domain-specific framing detail appended after the viewpoint template, verbatim from the dataset.
+_DOMAIN_VIEW_DESC = {
+    "droid_lerobot": ("The top row is from the wrist-mounted camera. The bottom row contains two horizontally "
+                      "concatenated third-person perspective views of the scene from opposite sides, with the robot visible."),
+}
+
+# Cosmos3 Generator Negative Prompt (report Appendix B.6) — the canonical default the
+# framework loads via `negative_prompt_file: neg_prompts.json` for video generation
+# (text2video / image2video / video2video / audio_image2video), per their sample_args.json.
+# It is a *structured* caption (the generator is trained on structured captions), not the
+# natural-language string used by earlier models. Table 21 / sample_args use the null string
+# for Text2Image and for all action/dynamics modes, so only video generation carries this.
+# Stored as a compact JSON string so it can be sent straight through as negative_prompt.
+_NEG_VIDEO = json.dumps(json.loads((EXAMPLES_DIR / "neg_prompts.json").read_text()),
+                        ensure_ascii=False, separators=(",", ":"))
+# Video-generation modes that take the default structured negative prompt above.
+_VIDEO_GEN_MODES = {"t2v", "i2v", "v2v", "transfer"}
 
 # Forward-dynamics example metadata — drives the Rollout control and the derived frame count.
 # Duration is bound to the action trajectory (1 frame per action step), so the user picks how
@@ -61,37 +76,53 @@ _FD_SPEC = json.loads((EXAMPLES_DIR / "fd_action_chunks.json").read_text())
 _FD_CHUNK = int(_FD_SPEC.get("action_chunk_size", 16))
 _FD_NCHUNKS = int(_FD_SPEC.get("num_chunks", len(_FD_SPEC.get("action_chunks", [[]]))))
 
+
+def _ex_prompt(name: str) -> str:
+    """The official structured-caption prompt for an example (verbatim from the paper's
+    inputs/omni/{name}.json). The model is trained on these JSON captions, so feeding them
+    directly reproduces the reference output without a separate prompt-upsampling step."""
+    try:
+        return (EXAMPLES_DIR / f"prompt_{name}.txt").read_text().strip()
+    except OSError:
+        return ""
+
+
+# Paper inference defaults (cosmos_framework/inference/defaults/*/sample_args.json):
+#   text2image : steps 50, guidance 4.0, shift 3.0, 1:1 (960x960)
+#   text2video : steps 35, guidance 6.0, shift 10.0, 16:9 (1280x720), fps 24, 189 frames
+#   image2video: steps 35, guidance 6.0, shift 10.0, 16:9 (1280x720), fps 24, 189 frames
+_T2V_PAPER = {"size": "1280x720", "fps": 24, "num_inference_steps": 35, "guidance_scale": 6.0,
+              "flow_shift": 10.0, "num_frames": 189}
+
 # ----------------------------------------------------------------------------- modes
 MODES: list[dict[str, Any]] = [
     # ---- GENERATE ----
-    {"id": "t2i", "label": "Text → Image", "surface": "generate", "group": "Imagine", "primary": True,
+    {"id": "t2i", "label": "Text → Image", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "image", "reference": "none", "blurb": "Generate a still image from a prompt.",
      "io": "Prompt → image", "key_knobs": ["size", "guidance_scale"],
-     "example": {"prompt": "Photorealistic close-up of a brushed-titanium robotic hand with exposed servos "
-                 "gently cradling a fresh dewy strawberry, soft window light, razor-sharp focus on the fruit's "
-                 "seeds and the metal's micro-scratches, shallow depth of field, studio product photography",
+     "example": {"prompt": "A humanoid robot with a sleek white and black design stands beside a red popcorn "
+                 "dispenser filled with golden popcorn. The robot uses its right arm to pick up a green paper "
+                 "cup from the table in front of it, preparing to fill it.",
                  "params": _IMAGE_DEFAULTS, "reference": None}},
-    {"id": "t2v", "label": "Text → Video", "surface": "generate", "group": "Imagine", "primary": True,
+    {"id": "t2v", "label": "Text → Video", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "video", "reference": "none", "blurb": "Imagine a video world from a prompt.",
      "io": "Prompt → video (with optional sound)", "key_knobs": ["size", "num_frames", "generate_sound"],
-     "example": {"prompt": "A lone surfer drops into a towering turquoise wave at golden hour; the lip throws "
-                 "over into a glassy barrel, offshore wind feathering spray off the crest, water rushing past "
-                 "with physically accurate fluid dynamics, cinematic tracking shot, photorealistic. Audio "
-                 "description: the deep roar of the breaking wave, the hiss of wind-blown spray, the board "
-                 "carving through water.",
-                 # sound defaults OFF: under a sequence-parallel (ulysses) deployment the
-                 # video+sound token count must be a multiple of ulysses_degree, which fails for
-                 # many frame counts. Video-only is always safe; sound is an opt-in toggle.
-                 "params": {**_VIDEO_DEFAULTS, "generate_sound": False, "negative_prompt": _NEG_VIDEO},
+     # Official Cosmos3 example (paper inputs/omni/t2v.json). build_request injects the paper B.6
+     # structured negative prompt (_NEG_VIDEO) for video generation when none is supplied.
+     "example": {"prompt": "A large industrial crucible pours a continuous glowing stream of molten metal "
+                 "into a mold below, sparks scattering from the impact, inside a dark steel-mill foundry; "
+                 "static wide shot.",
+                 "params": {**_T2V_PAPER, "generate_sound": False},
                  "reference": None}},
-    {"id": "i2v", "label": "Image → Video", "surface": "generate", "group": "Animate", "primary": True,
+    {"id": "i2v", "label": "Image → Video", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "video", "reference": "image", "blurb": "Animate a still image into a video.",
      "io": "Image + prompt → video", "key_knobs": ["num_frames"],
-     "example": {"prompt": "Bring the waterfall to life: water cascades over the rock face and splashes into the "
-                 "pool, the stream ripples over the mossy stones, ferns sway gently, fine mist drifts — natural, "
-                 "physically consistent motion, photorealistic.",
-                 "params": {**_VIDEO_DEFAULTS, "negative_prompt": _NEG_VIDEO}, "reference": "i2v_input.jpg"}},
-    {"id": "v2v", "label": "Video → Video", "surface": "generate", "group": "Edit",
+     # Official Cosmos3 example (paper inputs/omni/i2v.json). Short prompt; the Reasoner upsamples it
+     # using the first frame as visual ground truth.
+     "example": {"prompt": "The right robotic arm reaches up, picks the red ball off the top shelf, lowers "
+                 "it onto the bottom shelf, then retracts, while the left arm stays still.",
+                 "params": {**_T2V_PAPER}, "reference": "i2v_robot.jpg"}},
+    {"id": "v2v", "label": "Video → Video", "surface": "generate", "group": "World Model",
      "kind": "video", "reference": "video", "blurb": "Future prediction: keep the opening frames, generate what happens next.",
      "io": "Video (opening frames) + prompt → continuation", "key_knobs": ["num_frames"],
      "purpose": "Predict the future of a clip — the model locks your opening frames as ground truth and "
@@ -104,14 +135,13 @@ MODES: list[dict[str, Any]] = [
                 "options": ["first", "last"], "default": "first",
                 "optionLabels": {"first": "predict from start", "last": "extend past end"},
                 "hint": "Conditions on only ~5 frames (2 latent) — a short clip is enough; no need for a long video."}],
-     "example": {"prompt": "A white robotic arm with black joints continues pouring a transparent liquid from a "
-                 "light-green pitcher into a glass holding a reddish-brown liquid and a spoon, on a clean white "
-                 "tabletop; the pour proceeds smoothly and the glass fills to a higher level, the gripper keeping "
-                 "the pitcher steady. Physically consistent motion, bright soft lighting, photorealistic.",
-                 "params": {**_VIDEO_DEFAULTS, "size": "1280x720", "num_frames": 93, "fps": 24,
-                            "condition_video_keep": "first", "negative_prompt": _NEG_VIDEO},
-                 "reference": "v2v_robot_pour.mp4"}},
-    {"id": "transfer", "label": "Transfer · Sim→Real", "surface": "generate", "group": "Edit",
+     "example": {"prompt": "A robotic arm continues its manipulation task over the white plate, the gripper moving "
+                 "smoothly along a deliberate trajectory to handle the food and then retracting. Physically "
+                 "consistent motion, the scene and tableware stay stable, bright soft lighting, photorealistic.",
+                 "params": {**_VIDEO_DEFAULTS, "size": "1280x720", "num_frames": 121, "fps": 24,
+                            "condition_video_keep": "first"},
+                 "reference": "ref_video.mp4"}},
+    {"id": "transfer", "label": "Transfer · Sim→Real", "surface": "generate", "group": "Sim2Real (SDG)",
      "kind": "video", "reference": "video", "blurb": "Sim-to-real: turn a simulated / CG clip into a photorealistic video, keeping exact geometry & motion.",
      "io": "Sim (or control) clip + prompt → photorealistic video", "key_knobs": [],
      # length + aspect ratio are derived from the control clip automatically — not user knobs;
@@ -144,9 +174,9 @@ MODES: list[dict[str, Any]] = [
                  "preparing to slice the tomato with a knife that's not yet visible, maintaining the exact spatial "
                  "arrangement and camera angle of the original simulation.",
                  "params": {**_VIDEO_DEFAULTS, "size": "1280x720", "control": "edge", "control_guidance": 1.5,
-                            "guidance_scale": 3.0, "negative_prompt": _NEG_VIDEO},
+                            "guidance_scale": 3.0},
                  "reference": "transfer_sim_robot.mp4"}},
-    {"id": "fwd_dynamics", "label": "Forward dynamics", "surface": "generate", "group": "Simulate",
+    {"id": "fwd_dynamics", "label": "Forward dynamics", "surface": "generate", "group": "Robotics", "action": True,
      "kind": "video", "reference": "image", "blurb": "Action-conditioned future prediction: roll out a video "
      "from a first frame + an action trajectory.", "chunk_size": _FD_CHUNK,
      "io": "First frame + action trajectory → video", "key_knobs": [],
@@ -163,7 +193,7 @@ MODES: list[dict[str, Any]] = [
                  "physically consistent contact and object motion.",
                  "params": {**_ACTION_DEFAULTS, "size": "960x960", "rollout_chunks": 4},
                  "reference": "fd_first_frame.png", "action": "fd_action_chunks.json"}},
-    {"id": "inv_dynamics", "label": "Inverse dynamics", "surface": "generate", "group": "Simulate",
+    {"id": "inv_dynamics", "label": "Inverse dynamics", "surface": "generate", "group": "Autonomous Driving", "action": True,
      "kind": "video", "reference": "video", "blurb": "Recover the ego-motion / action trajectory from a video.",
      "io": "Video → action trajectory (numbers, not a clip)", "key_knobs": [],
      # The model's real output here is the action tensor, not a clip — tell the UI to surface the
@@ -172,28 +202,29 @@ MODES: list[dict[str, Any]] = [
      "example": {"prompt": "Recover the per-frame ego-motion behind this driving clip — the camera's "
                  "translation and rotation through the scene, frame by frame. The output is a 60×9 action "
                  "trajectory, not a video.",
-                 "params": {**_ACTION_DEFAULTS, "num_frames": 61}, "reference": "id_av_input.mp4"}},
-    {"id": "policy", "label": "Policy", "surface": "generate", "group": "Simulate",
-     "kind": "video", "reference": "image", "blurb": "Instruction-driven rollout: the model predicts its own "
-     "actions from a first frame + a language goal, and rolls out the video.", "chunk_size": _FD_CHUNK,
-     "io": "First frame + instruction → predicted actions + video",
-     "purpose": "Give it a goal, not a script — the model decides the actions itself and rolls them out, "
-                "chunk by chunk (autoregressive), so it can run long without a hand-authored action plan.",
-     "flow": {"inputs": ["first frame", "instruction"], "output": "actions + video"},
-     "notes": [["model decides", "the action trajectory"],
-               ["rolls out", "autoregressively — each chunk continues the last"]],
-     "extra": [{"key": "rollout_chunks", "label": f"Rollout (×{_FD_CHUNK}-step chunks, autoregressive)", "type": "int",
-                "widget": "slider", "min": 1, "max": 25, "step": 1, "default": 4, "unit": "chunks"}],
-     # Dedicated policy checkpoint Cosmos3-Nano-Policy-DROID: droid_lerobot domain, 8-D
-     # action, 640x480 @ 15 fps, 30 steps. First frame is a matching tabletop scene.
-     # The DROID policy is instruction-conditioned: the goal must name the actual object and
-     # container in the first frame (a banana + a white plate), or the arm hovers without grasping.
-     # 8 chunks (~128 steps) gives it enough horizon to actually pick up and carry the object.
-     "example": {"prompt": "Pick up the banana and place it on the plate.",
-                 "params": {"size": "640x480", "fps": 15, "num_inference_steps": 50, "guidance_scale": 1.0,
-                            "flow_shift": 5.0, "domain_name": "droid_lerobot", "raw_action_dim": 8,
-                            "rollout_chunks": 8},
-                 "reference": "policy_first_frame.png", "action": "policy"}},
+                 "params": {**_ACTION_DEFAULTS, "num_frames": 61, "action_chunk_size": 60}, "reference": "inv_av_official.mp4"}},
+    {"id": "policy", "label": "Policy", "surface": "generate", "group": "Robotics", "action": True,
+     "kind": "video", "reference": "image", "blurb": "Robot policy: from a single first frame + a language "
+     "instruction the model predicts its own action trajectory and rolls out the manipulation.",
+     "io": "First frame + instruction → predicted actions + manipulation video",
+     "purpose": "Turn perception into action — give the robot a goal, not a script, and the same omnimodal "
+                "backbone follows the instruction: from one camera frame it predicts a 16-step manipulation "
+                "trajectory and rolls out the resulting arm motion.",
+     "flow": {"inputs": ["first frame", "instruction"], "output": "predicted manipulation video"},
+     "notes": [["model decides", "the action trajectory from the instruction"],
+               ["rolls out", "one coherent manipulation (single shot) — try different instructions"]],
+     "extra": [{"key": "num_frames", "label": "Frames", "type": "int", "widget": "slider",
+                "min": 17, "max": 200, "step": 1, "default": 90, "unit": "f"}],
+     # HD, cluttered manipulation scene (apple, banana, mug, blocks, can, plate) so many instructions work:
+     # "pick up the red apple…", "move the blue mug…", "stack the blocks…". bridge_orig_lerobot embodiment,
+     # 10-D action (pos+rot6d+gripper), 5 fps, single 32-step chunk. Runs on the base generator.
+     "example": {"prompt": "Pick up the red apple and place it on the plate.",
+                 # guidance 7 / flow_shift 6 sharpens the HD rollout; fps 15 = smooth playback. Frames is a
+                 # user slider (default 90 = 6s @ 15fps); the action chunk is derived as num_frames - 1.
+                 "params": {"size": "1280x720", "fps": 15, "num_inference_steps": 50, "guidance_scale": 7.0,
+                            "flow_shift": 6.0, "domain_name": "bridge_orig_lerobot", "raw_action_dim": 10,
+                            "num_frames": 90},
+                 "reference": "policy_robot_scene.png", "action": "policy"}},
     # ---- REASON ----
     {"id": "caption", "label": "Captioning", "surface": "reason", "group": "Reason", "primary": True,
      "kind": "text", "reference": "image", "blurb": "Detailed description of an image or video.",
@@ -318,6 +349,10 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("prompt is required")
     if params.get("negative_prompt"):
         fields["negative_prompt"] = params["negative_prompt"]
+    elif mode_id in _VIDEO_GEN_MODES:
+        # paper-faithful default: video generation conditions on the B.6 structured negative
+        # prompt (the framework's neg_prompts.json). T2I + action/dynamics keep the null string.
+        fields["negative_prompt"] = _NEG_VIDEO
     if params.get("size"):
         fields["size"] = params["size"]
     for key, cast in (("num_inference_steps", int), ("guidance_scale", float), ("seed", int)):
@@ -371,11 +406,26 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
                              "domain_name": params.get("domain_name") or "av",
                              "action_chunk_size": chunk,
                              "raw_action_dim": int(params.get("raw_action_dim") or 9)})
-        fields["num_frames"] = int(_num(params, "num_frames", int) or (chunk + 1))
+        # The pipeline requires num_frames == chunk or chunk+1; ignore any leaked UI
+        # value (e.g. the hidden video knob's 93) that falls outside that range.
+        nf = _num(params, "num_frames", int)
+        fields["num_frames"] = nf if nf in (chunk, chunk + 1) else (chunk + 1)
+    elif mode_id == "policy":
+        # Single-shot planning policy: the model predicts its own action trajectory + rolls
+        # out the future. Runs on the base generator. The user-adjustable Frames slider sets
+        # num_frames; the action chunk is num_frames - 1 (pipeline needs num_frames == chunk+1).
+        nf = _num(params, "num_frames", int)
+        chunk = (nf - 1) if (nf and nf > 1) else int(params.get("action_chunk_size") or 60)
+        extra_params.update({"action_mode": "policy",
+                             "domain_name": params.get("domain_name") or "av",
+                             "action_chunk_size": chunk,
+                             "raw_action_dim": int(params.get("raw_action_dim") or 9)})
+        fields["num_frames"] = chunk + 1
 
-    # forward/inverse dynamics read the action back from the async job, like the cookbook.
-    return {"kind": m["kind"], "reference": m["reference"], "fields": fields, "extra_params": extra_params,
-            "async_action": mode_id in ("fwd_dynamics", "inv_dynamics")}
+    # action modes read the predicted/echoed action back from the async job, like the cookbook.
+    req = {"kind": m["kind"], "reference": m["reference"], "fields": fields, "extra_params": extra_params,
+           "async_action": mode_id in ("fwd_dynamics", "inv_dynamics", "policy")}
+    return _apply_action_prompt_format(req)
 
 
 def fd_action(params: dict[str, Any]) -> list[list[float]]:
@@ -387,6 +437,59 @@ def fd_action(params: dict[str, Any]) -> list[list[float]]:
 
 def fd_chunk_count() -> int:
     return len(_FD_SPEC.get("action_chunks", []))
+
+
+def _action_framing(domain: str) -> str | None:
+    """Resolve the cinematography framing text for a domain (viewpoint template +
+    optional domain-specific detail), mirroring ActionPromptJsonFormatter._get_viewpoint_caption."""
+    tmpl = _VIEWPOINT_TEMPLATES.get(_DOMAIN_VIEWPOINT.get(domain, ""))
+    desc = _DOMAIN_VIEW_DESC.get(domain)
+    if tmpl is None:
+        return desc
+    if desc:
+        return tmpl + (" " if tmpl.endswith(".") else ". ") + desc
+    return tmpl
+
+
+def _action_json_caption(prompt: str, domain: str, fps: int, width: int, height: int, num_frames: int) -> str:
+    """Build the structured action JSON caption the action checkpoints were trained on."""
+    secs = (num_frames / fps) if fps else 0.0
+    mm, ss = divmod(int(round(secs)), 60)
+    desc = prompt if prompt[-1:] in ".!?" else prompt + "."
+    cap: dict[str, Any] = {}
+    framing = _action_framing(domain)
+    if framing:
+        cap["cinematography"] = {"framing": framing}
+    cap["actions"] = [{"time": f"0:00-{mm}:{ss:02d}", "description": desc}]
+    cap["duration"] = f"{int(secs)}s"
+    cap["fps"] = float(fps)
+    cap["resolution"] = {"H": int(height), "W": int(width)}
+    g = math.gcd(int(width), int(height)) or 1
+    cap["aspect_ratio"] = f"{int(width) // g},{int(height) // g}"
+    return json.dumps(cap)
+
+
+def _apply_action_prompt_format(req: dict[str, Any]) -> dict[str, Any]:
+    """In-place: make an action request follow the paper's inference format — IMAGE system
+    prompt + structured JSON caption. No-op for non-action requests."""
+    ep = req.get("extra_params") or {}
+    if not ep.get("action_mode"):
+        return req
+    f = req["fields"]
+    raw = (f.get("prompt") or "").strip()
+    if raw and raw != ".":
+        try:
+            w, h = (int(x) for x in str(f.get("size") or _ACTION_DEFAULTS["size"]).lower().split("x"))
+        except (ValueError, AttributeError):
+            w, h = 640, 480
+        f["prompt"] = _action_json_caption(
+            raw, ep.get("domain_name", ""), int(f.get("fps") or 10), w, h, int(f.get("num_frames") or 1)
+        )
+    # Action modes are tokenized with is_video=False → the IMAGE system prompt.
+    ep["use_system_prompt"] = True
+    ep["system_prompt"] = _ACTION_SYSTEM_PROMPT
+    req["extra_params"] = ep
+    return req
 
 
 def fd_single_chunk_request(params: dict[str, Any], idx: int) -> dict[str, Any]:
@@ -406,27 +509,29 @@ def fd_single_chunk_request(params: dict[str, Any], idx: int) -> dict[str, Any]:
     extra = {"use_resolution_template": False, "use_duration_template": False,
              "action_mode": "forward_dynamics", "domain_name": _FD_SPEC.get("domain_name", "agibotworld"),
              "action_chunk_size": len(chunk), "action": chunk}
-    return {"kind": "video", "reference": "image", "fields": fields, "extra_params": extra, "async_action": True}
+    return _apply_action_prompt_format(
+        {"kind": "video", "reference": "image", "fields": fields, "extra_params": extra, "async_action": True})
 
 
 def policy_single_chunk_request(params: dict[str, Any]) -> dict[str, Any]:
     """One policy chunk: the model PREDICTS a 16-step action from the first frame + the
     instruction and rolls out 17 frames. Chained autoregressively for a long video."""
-    chunk = _FD_CHUNK
+    chunk = int(params.get("action_chunk_size") or _FD_CHUNK)
     prompt = (params.get("prompt") or mode("policy").get("example", {}).get("prompt") or ".").strip()
     fields = {
         "prompt": prompt or ".",
         "size": params.get("size") or _ACTION_DEFAULTS["size"],
-        "fps": int(_num(params, "fps", int) or _FD_SPEC.get("fps") or _ACTION_DEFAULTS["fps"]),
+        "fps": int(_num(params, "fps", int) or _ACTION_DEFAULTS["fps"]),
         "num_inference_steps": int(_num(params, "num_inference_steps", int) or _ACTION_DEFAULTS["num_inference_steps"]),
         "guidance_scale": float(_num(params, "guidance_scale", float) or _ACTION_DEFAULTS["guidance_scale"]),
         "flow_shift": float(_num(params, "flow_shift", float) or _ACTION_DEFAULTS["flow_shift"]),
         "num_frames": chunk + 1,
     }
     extra = {"use_resolution_template": False, "use_duration_template": False,
-             "action_mode": "policy", "domain_name": params.get("domain_name") or "droid_lerobot",
-             "raw_action_dim": int(params.get("raw_action_dim") or 8), "action_chunk_size": chunk}
-    return {"kind": "video", "reference": "image", "fields": fields, "extra_params": extra, "async_action": True}
+             "action_mode": "policy", "domain_name": params.get("domain_name") or "bridge_orig_lerobot",
+             "raw_action_dim": int(params.get("raw_action_dim") or 10), "action_chunk_size": chunk}
+    return _apply_action_prompt_format(
+        {"kind": "video", "reference": "image", "fields": fields, "extra_params": extra, "async_action": True})
 
 
 def roundtrip_id_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:

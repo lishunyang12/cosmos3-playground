@@ -3,7 +3,7 @@
   "domain_name": "agibotworld",
   "view_point": "concat_view",
   "fps": 10,
-  "image_size": 480,
+  "image_size": 720,
   "action_chunk_size": 16,
   "num_chunks": 4,
   "action_shape_per_chunk": [

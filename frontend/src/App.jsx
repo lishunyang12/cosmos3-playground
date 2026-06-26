@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getConfig, generate, getJob, jobContentUrl, requestPreview, exampleAction, validate, rolloutStart, rolloutStatus, rolloutContentUrl } from "./api.js";
+import { getConfig, generate, getJob, jobContentUrl, requestPreview, exampleAction, exampleResult, exampleResultContentUrl, validate, rolloutStart, rolloutStatus, rolloutContentUrl } from "./api.js";
 import {
   IconAtom, IconSparkles, IconEye, IconUpload, IconAlert,
   IconChevron, IconReset, IconDownload,
@@ -17,6 +17,211 @@ function fmt(sec) {
 
 // Inverse-dynamics (and any action-output mode) returns a [T, D] trajectory, not a clip.
 // Surface it as a motion-profile plot + a numeric table + a full-data download.
+// Overlay the recovered/predicted ego-motion as an arrow drawn on the clip itself:
+// heading = direction of travel (lateral vs forward), length ∝ ‖motion‖ (speed),
+// redrawn each frame in sync with playback.
+// rot6d (two columns of R) -> small-angle rotation about each axis (yaw/pitch/roll).
+function rot6dRPY(r) {
+  const a1 = [+r[3], +r[4], +r[5]], a2 = [+r[6], +r[7], +r[8]];
+  const nrm = (v) => Math.hypot(v[0], v[1], v[2]) || 1e-9;
+  const sc = (v, s) => [v[0] * s, v[1] * s, v[2] * s];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const b1 = sc(a1, 1 / nrm(a1));
+  const t = [a2[0] - b1[0] * dot(b1, a2), a2[1] - b1[1] * dot(b1, a2), a2[2] - b1[2] * dot(b1, a2)];
+  const b2 = sc(t, 1 / nrm(t));
+  const b3 = [b1[1] * b2[2] - b1[2] * b2[1], b1[2] * b2[0] - b1[0] * b2[2], b1[0] * b2[1] - b1[1] * b2[0]];
+  // R columns = [b1 b2 b3]; skew part -> rotation vector about world x/y/z
+  const R = [[b1[0], b2[0], b3[0]], [b1[1], b2[1], b3[1]], [b1[2], b2[2], b3[2]]];
+  return { pitch: (R[2][1] - R[1][2]) / 2, yaw: (R[0][2] - R[2][0]) / 2, roll: (R[1][0] - R[0][1]) / 2 };
+}
+
+// Overlay a generic action plan on the output video: a per-frame bar for every action
+// dimension, redrawn in sync with playback so you see the action driving each frame.
+function ActionPlanOverlay({ action, videoUrl, fps }) {
+  const shape = action.shape || [];
+  const d = action.data;
+  const cols = shape[1] || (Array.isArray(d?.[0]) ? d[0].length : 1);
+  let rows = [];
+  if (Array.isArray(d) && Array.isArray(d[0])) rows = d;
+  else if (Array.isArray(d)) for (let i = 0; i < d.length; i += cols) rows.push(d.slice(i, i + cols));
+  const n = rows.length;
+  const vref = useRef(null), cref = useRef(null);
+  const [step, setStep] = useState(0);
+  const rmax = useMemo(() => {
+    const m = Array(cols).fill(1e-6);
+    for (const r of rows) for (let j = 0; j < cols; j++) m[j] = Math.max(m[j], Math.abs(Number(r[j])));
+    return m;
+  }, [rows, cols]);
+  useEffect(() => {
+    let raf;
+    const draw = () => {
+      const v = vref.current, c = cref.current;
+      if (v && c && c.clientWidth) {
+        const W = (c.width = c.clientWidth), H = (c.height = c.clientHeight);
+        const s = Math.min(n - 1, Math.max(0, Math.round((v.currentTime || 0) * fps)));
+        const r = rows[s] || [];
+        const ctx = c.getContext("2d");
+        ctx.clearRect(0, 0, W, H);
+        const ph = Math.max(60, H * 0.26), py = H - ph, fs = Math.max(11, Math.round(H * 0.028));
+        ctx.fillStyle = "rgba(0,0,0,0.42)"; ctx.fillRect(0, py, W, ph);
+        const cy = py + ph * 0.55, half = ph * 0.34;
+        ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(6, cy); ctx.lineTo(W - 6, cy); ctx.stroke();   // zero line
+        const slot = (W - 12) / cols;
+        for (let j = 0; j < cols; j++) {
+          const x = 6 + j * slot + slot / 2, nv = Number(r[j]) / rmax[j];
+          const h = Math.max(-1, Math.min(1, nv)) * half;
+          ctx.fillStyle = `hsl(${Math.round((j / cols) * 300)} 75% 58%)`;
+          ctx.fillRect(x - Math.max(1, slot * 0.34), cy - Math.max(0, h), Math.max(2, slot * 0.68), Math.abs(h));
+        }
+        ctx.textBaseline = "top"; ctx.font = `${fs}px ui-sans-serif, system-ui, sans-serif`;
+        const mag = Math.hypot(...r.map(Number)).toFixed(2);
+        ctx.fillStyle = "rgba(255,255,255,0.92)";
+        ctx.fillText(`action plan · step ${s + 1}/${n} · ${cols}-D · ‖a‖ ${mag}`, 8, py + 4);
+        if (s !== step) setStep(s);
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [rows, n, fps, rmax, step]);
+  return (
+    <div className="trajectory">
+      <div className="traj-head">
+        <span className="traj-title">Predicted video · action plan overlay</span>
+        <span className="traj-meta">step {step + 1}/{n}</span>
+      </div>
+      <div className="ego-wrap">
+        <video ref={vref} className="ego-video" src={videoUrl} controls autoPlay loop muted playsInline />
+        <canvas ref={cref} className="ego-ov" />
+      </div>
+      <div className="traj-cap">each bar = one action dimension at the current step (signed, around zero), in sync with the rollout</div>
+    </div>
+  );
+}
+
+function EgoMotionOverlay({ action, videoUrl, fps }) {
+  const shape = action.shape || [];
+  const d = action.data;
+  const cols = shape[1] || (Array.isArray(d?.[0]) ? d[0].length : 1);
+  let rows = [];
+  if (Array.isArray(d) && Array.isArray(d[0])) rows = d;
+  else if (Array.isArray(d)) for (let i = 0; i < d.length; i += cols) rows.push(d.slice(i, i + cols));
+  const n = rows.length;
+  const hasRot = cols >= 9;
+  const vref = useRef(null), cref = useRef(null);
+  const [fcur, setFcur] = useState(0);
+
+  // Per-frame 6-DOF: translation (x,y,z) + rotation (yaw,pitch,roll); plus per-field abs-max for bar scaling.
+  const { comps, rmax } = useMemo(() => {
+    const comps = rows.map((r) => {
+      const x = +r[0] || 0, y = +r[1] || 0, z = +r[2] || 0;
+      const rot = hasRot ? rot6dRPY(r) : { yaw: 0, pitch: 0, roll: 0 };
+      return { x, y, z, ...rot };
+    });
+    const fields = ["z", "x", "y", "yaw", "pitch", "roll"];
+    const rmax = {}; fields.forEach((f) => { rmax[f] = Math.max(1e-6, ...comps.map((c) => Math.abs(c[f]))); });
+    return { comps, rmax };
+  }, [rows, hasRot]);
+
+  useEffect(() => {
+    let raf;
+    const draw = () => {
+      const v = vref.current, c = cref.current;
+      if (v && c && c.clientWidth) {
+        const W = (c.width = c.clientWidth), H = (c.height = c.clientHeight);
+        const fr = Math.min(n - 1, Math.max(0, Math.round((v.currentTime || 0) * fps)));
+        const m = comps[fr] || { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0 };
+        const ctx = c.getContext("2d");
+        ctx.clearRect(0, 0, W, H);
+        const cl = (v) => Math.max(-1, Math.min(1, v));
+        const spd = Math.abs(m.z) / rmax.z;            // forward speed 0..1
+        const hue = 140 - 140 * spd;                   // green(slow) -> red(fast)
+        const fs = Math.max(11, Math.round(H * 0.03));
+        ctx.textBaseline = "top"; ctx.lineCap = "round";
+
+        // artificial horizon — pitch (vertical shift) + roll (tilt)
+        {
+          const rollA = cl(m.roll / rmax.roll) * 0.5, pY = H * 0.4 + cl(m.pitch / rmax.pitch) * H * 0.12;
+          ctx.save(); ctx.translate(W / 2, pY); ctx.rotate(rollA);
+          ctx.strokeStyle = "rgba(120,200,255,0.5)"; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.moveTo(-W * 0.22, 0); ctx.lineTo(-W * 0.05, 0);
+          ctx.moveTo(W * 0.05, 0); ctx.lineTo(W * 0.22, 0); ctx.moveTo(0, -H * 0.02); ctx.lineTo(0, H * 0.02); ctx.stroke();
+          ctx.restore();
+        }
+        // speedometer (bottom-left) — forward speed; the dial color answers "what does speed look like"
+        {
+          const sr = H * 0.16, scx = sr + W * 0.02 + 8, scy = H - sr - H * 0.06;
+          const a0 = Math.PI * 0.75, a1 = Math.PI * 2.25, av = a0 + (a1 - a0) * spd;
+          ctx.lineWidth = Math.max(5, H * 0.024); ctx.strokeStyle = "rgba(255,255,255,0.16)";
+          ctx.beginPath(); ctx.arc(scx, scy, sr, a0, a1); ctx.stroke();
+          ctx.strokeStyle = `hsl(${hue} 90% 55%)`; ctx.beginPath(); ctx.arc(scx, scy, sr, a0, av); ctx.stroke();
+          ctx.strokeStyle = "#fff"; ctx.lineWidth = Math.max(2, H * 0.009);
+          ctx.beginPath(); ctx.moveTo(scx, scy); ctx.lineTo(scx + Math.cos(av) * sr * 0.85, scy + Math.sin(av) * sr * 0.85); ctx.stroke();
+          ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(scx, scy, H * 0.012, 0, 7); ctx.fill();
+          ctx.textAlign = "center";
+          ctx.font = `bold ${Math.round(fs * 1.25)}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.fillStyle = `hsl(${hue} 90% 66%)`; ctx.fillText(m.z.toFixed(3), scx, scy + sr * 0.22);
+          ctx.font = `${Math.round(fs * 0.82)}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.fillStyle = "rgba(255,255,255,0.72)"; ctx.fillText("SPEED (fwd)", scx, scy + sr * 0.5);
+          ctx.textAlign = "left";
+        }
+        // steering wheel (bottom-right) — yaw
+        {
+          const wr = H * 0.13, wcx = W - wr - W * 0.03, wcy = H - wr - H * 0.07;
+          const steer = cl(m.yaw / rmax.yaw) * Math.PI * 0.6;
+          ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth = Math.max(4, H * 0.018);
+          ctx.beginPath(); ctx.arc(wcx, wcy, wr, 0, 7); ctx.stroke();
+          ctx.save(); ctx.translate(wcx, wcy); ctx.rotate(steer); ctx.lineWidth = Math.max(3, H * 0.012);
+          ctx.beginPath(); ctx.moveTo(-wr * 0.85, 0); ctx.lineTo(wr * 0.85, 0); ctx.moveTo(0, 0); ctx.lineTo(0, wr * 0.85); ctx.stroke();
+          ctx.fillStyle = "#ff5555"; ctx.beginPath(); ctx.arc(0, -wr, H * 0.016, 0, 7); ctx.fill(); ctx.restore();
+          ctx.textAlign = "center"; ctx.font = `${Math.round(fs * 0.82)}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.fillStyle = "rgba(255,255,255,0.72)"; ctx.fillText("STEER (yaw)", wcx, wcy + wr + 5); ctx.textAlign = "left";
+        }
+        // G-meter (bottom-center) — lateral x / vertical y
+        {
+          const gr = H * 0.1, gcx = W / 2, gcy = H - gr - H * 0.07;
+          ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.arc(gcx, gcy, gr, 0, 7); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(gcx - gr, gcy); ctx.lineTo(gcx + gr, gcy);
+          ctx.moveTo(gcx, gcy - gr); ctx.lineTo(gcx, gcy + gr); ctx.stroke();
+          ctx.fillStyle = "#5cd2ff";
+          ctx.beginPath(); ctx.arc(gcx + cl(m.x / rmax.x) * gr, gcy + cl(m.y / rmax.y) * gr, H * 0.018, 0, 7); ctx.fill();
+          ctx.textAlign = "center"; ctx.font = `${Math.round(fs * 0.82)}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.fillStyle = "rgba(255,255,255,0.72)"; ctx.fillText("G  lat/vert", gcx, gcy + gr + 5); ctx.textAlign = "left";
+        }
+        // legend
+        ctx.font = `${fs}px ui-sans-serif, system-ui, sans-serif`;
+        const legend = "race HUD · speedometer = forward speed (green→red) · wheel = steering (yaw) · G-meter = lateral/vertical · horizon = pitch/roll";
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(6, 6, ctx.measureText(legend).width + 14, fs + 10);
+        ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.fillText(legend, 13, 11);
+        if (fr !== fcur) setFcur(fr);
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [comps, rmax, n, fps, fcur]);
+
+  return (
+    <div className="trajectory">
+      <div className="traj-head">
+        <span className="traj-title">Recovered ego-motion · driving HUD</span>
+        <span className="traj-meta">frame {fcur}/{n - 1}</span>
+      </div>
+      <div className="ego-wrap">
+        <video ref={vref} className="ego-video" src={videoUrl} controls autoPlay loop muted playsInline />
+        <canvas ref={cref} className="ego-ov" />
+      </div>
+      <div className="traj-cap">
+        Driver's-eye HUD of the recovered motion: <b>speedometer</b> = forward speed (z, dial color green→red),
+        <b>steering wheel</b> = yaw, <b>G-meter</b> = lateral (x) / vertical (y), <b>artificial horizon</b> = pitch + roll.
+        Rotation is decoded from the rot6d block. Plays in sync with the clip.
+      </div>
+    </div>
+  );
+}
+
 function ActionTrajectory({ action, title }) {
   const shape = action.shape || [];
   const d = action.data;
@@ -26,16 +231,54 @@ function ActionTrajectory({ action, title }) {
   else if (Array.isArray(d)) for (let i = 0; i < d.length; i += cols) rows.push(d.slice(i, i + cols));
   const n = rows.length;
 
-  // per-step L2 magnitude — the overall motion profile over time
-  const mags = rows.map((r) => Math.sqrt(r.reduce((s, x) => s + Number(x) ** 2, 0)));
-  const W = 520, H = 60, pad = 4;
-  const hi = Math.max(...mags, 1e-6), lo = Math.min(...mags, 0);
-  const pts = mags.map((m, i) => {
-    const x = pad + (i / Math.max(1, n - 1)) * (W - 2 * pad);
-    const y = H - pad - ((m - lo) / Math.max(1e-6, hi - lo)) * (H - 2 * pad);
+  // Playback fps (the action-plan view stuffs "N fps" into dtype); default to a calm 12.
+  const fps = (() => { const m = /([\d.]+)\s*fps/.exec(String(action.dtype || "")); return m ? Number(m[1]) : 12; })();
+
+  const [t, setT] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const rafRef = useRef(0); const accRef = useRef(0); const lastRef = useRef(0);
+
+  useEffect(() => { setT(0); setPlaying(false); }, [n, action.action_mode, action.domain_id]);
+  useEffect(() => {
+    if (!playing || n <= 1) return;
+    const step = 1000 / Math.max(1, fps);
+    lastRef.current = performance.now(); accRef.current = 0;
+    const tick = (now) => {
+      accRef.current += now - lastRef.current; lastRef.current = now;
+      if (accRef.current >= step) {
+        const adv = Math.floor(accRef.current / step); accRef.current -= adv * step;
+        setT((prev) => { const nx = prev + adv; if (nx >= n - 1) { setPlaying(false); return n - 1; } return nx; });
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [playing, n, fps]);
+
+  // Per-dimension min/max so each channel gets its own visible scale.
+  const stats = useMemo(() => {
+    const mn = Array(cols).fill(Infinity), mx = Array(cols).fill(-Infinity);
+    for (const r of rows) for (let j = 0; j < cols; j++) { const v = Number(r[j]); if (v < mn[j]) mn[j] = v; if (v > mx[j]) mx[j] = v; }
+    return { mn, mx };
+  }, [rows, cols]);
+
+  const SW = 150, SH = 38, sp = 3;
+  // Cosmos canonical action = translation(3) + rot6d(6) [+ gripper(1)] (action_spec.py: Pos()+Rot("rot6d")[+Gripper()]).
+  const isPose = cols === 9 || cols === 10;
+  const POSE_LBL = cols === 10
+    ? ["x", "y", "z", "R₀", "R₁", "R₂", "R₃", "R₄", "R₅", "grip"]
+    : ["x", "y", "z", "R₀", "R₁", "R₂", "R₃", "R₄", "R₅"];
+  const label = (j) => (isPose ? POSE_LBL[j] : `d${j}`);
+  // Translation = warm, rotation = cool, gripper = magenta — so the blocks read apart at a glance.
+  const hue = (j) => (!isPose ? Math.round((j / Math.max(1, cols)) * 310) : j < 3 ? 20 + j * 14 : j < 9 ? 165 + (j - 3) * 22 : 305);
+  const norm = (v, j) => (Number(v) - stats.mn[j]) / Math.max(1e-9, stats.mx[j] - stats.mn[j]);
+  const sparkPts = (j) => rows.map((r, i) => {
+    const x = sp + (i / Math.max(1, n - 1)) * (SW - 2 * sp);
+    const y = SH - sp - norm(r[j], j) * (SH - 2 * sp);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(" ");
-  const preview = rows.slice(0, 14);
+  const cx = sp + (t / Math.max(1, n - 1)) * (SW - 2 * sp);
+  const cur = rows[Math.min(t, n - 1)] || [];
 
   function download() {
     const payload = { shape, dtype: action.dtype, action_mode: action.action_mode, domain_id: action.domain_id, data: rows };
@@ -48,26 +291,54 @@ function ActionTrajectory({ action, title }) {
   return (
     <div className="trajectory">
       <div className="traj-head">
-        <span className="traj-title">{title || (action.action_mode === "inverse_dynamics" ? "Recovered action trajectory (model output)" : "Action plan (input)")}</span>
+        <span className="traj-title">{title || (action.action_mode === "inverse_dynamics" ? "Recovered ego-motion (model output)" : "Action trajectory")}</span>
         <span className="traj-meta">{shape.join(" × ")} · domain {action.domain_id}</span>
       </div>
-      <svg className="sparkline" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
-        <polyline points={pts} fill="none" />
-      </svg>
-      <div className="traj-cap">curve = per-step motion magnitude ‖aₜ‖ over {n} steps · table = raw action value per dimension</div>
-      <div className="traj-table-wrap">
-        <table className="traj-table">
-          <thead><tr><th>t</th>{Array.from({ length: cols }, (_, i) => <th key={i}>d{i}</th>)}</tr></thead>
-          <tbody>
-            {preview.map((r, i) => (
-              <tr key={i}><td className="t">{i}</td>{r.map((x, j) => <td key={j}>{Number(x).toFixed(3)}</td>)}</tr>
-            ))}
-          </tbody>
-        </table>
+
+      <div className="traj-transport">
+        <button className="traj-play" type="button" aria-label={playing ? "pause" : "play"}
+          onClick={() => { if (t >= n - 1) setT(0); setPlaying((p) => !p); }}>{playing ? "❚❚" : "▶"}</button>
+        <input className="traj-scrub" type="range" min={0} max={Math.max(0, n - 1)} value={t}
+          onChange={(e) => { setPlaying(false); setT(Number(e.target.value)); }} />
+        <span className="traj-tcount">t&nbsp;{t}/{n - 1}</span>
       </div>
-      <div className="traj-foot">
-        showing {preview.length} of {n} steps · <a onClick={download}><IconDownload /> full trajectory (JSON)</a>
+
+      <div className="traj-grid">
+        {Array.from({ length: cols }, (_, j) => (
+          <div className="traj-cell" key={j}>
+            <div className="traj-cell-head">
+              <span className="traj-dot" style={{ background: `hsl(${hue(j)} 70% 55%)` }} />{label(j)}
+              <span className="traj-cell-val">{Number(cur[j] ?? 0).toFixed(3)}</span>
+            </div>
+            <svg className="traj-spark" viewBox={`0 0 ${SW} ${SH}`} preserveAspectRatio="none">
+              <polyline points={sparkPts(j)} fill="none" stroke={`hsl(${hue(j)} 70% 55%)`} strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
+              <line className="traj-cursor" x1={cx} y1="0" x2={cx} y2={SH} />
+              <circle cx={cx} cy={SH - sp - norm(cur[j] ?? stats.mn[j], j) * (SH - 2 * sp)} r="2.6" fill={`hsl(${hue(j)} 85% 62%)`} />
+            </svg>
+          </div>
+        ))}
       </div>
+
+      <div className="traj-heat-wrap">
+        <div className="traj-heat" style={{ gridTemplateColumns: `repeat(${n}, 1fr)` }}>
+          {Array.from({ length: cols }, (_, j) =>
+            rows.map((r, i) => (
+              <div key={`${j}-${i}`} className={"traj-hc" + (i === t ? " on" : "")}
+                style={{ background: `hsl(${hue(j)} 68% ${18 + norm(r[j], j) * 58}%)` }} />
+            ))
+          )}
+        </div>
+      </div>
+
+      <div className="traj-cap">{cols} action dims × {n} steps · ▶ sweeps the cursor across every channel · heatmap: rows = dims, columns = time</div>
+      {isPose && (
+        <div className="traj-legend">
+          <b style={{ color: "hsl(27 70% 60%)" }}>x y z</b> = relative translation (per frame) ·{" "}
+          <b style={{ color: "hsl(200 70% 62%)" }}>R₀…R₅</b> = rotation as rot6d (first two columns of the 3×3 matrix; identity = 1,0,0, 0,1,0)
+          {cols === 10 && <> · <b style={{ color: "hsl(305 70% 64%)" }}>grip</b> = gripper</>}
+        </div>
+      )}
+      <div className="traj-foot"><a onClick={download}><IconDownload /> full trajectory (JSON)</a></div>
     </div>
   );
 }
@@ -550,7 +821,7 @@ export default function App() {
   // Fetch the action plan that drives action modes (forward dynamics) for visualization.
   useEffect(() => {
     setActionPlan(null);
-    if (mode?.group === "Simulate" && mode?.reference === "image") {
+    if (mode?.action && mode?.reference === "image") {
       exampleAction(modeId).then(setActionPlan).catch(() => setActionPlan(null));
     }
   }, [modeId, mode]);
@@ -573,6 +844,19 @@ export default function App() {
         .then((b) => b && setRefFile(new File([b], ex.reference, { type: b.type })))
         .catch(() => {});
     }
+    // Show the pre-baked output by default (gallery mode); Generate replaces it live.
+    let live = true;
+    exampleResult(mode.id).then((meta) => {
+      if (!live || !meta) return;
+      const hasMedia = !!meta.media;
+      const src = hasMedia ? exampleResultContentUrl(mode.id) : undefined;
+      if (meta.kind === "text") setResult({ kind: "text", text: meta.text, cached: true });
+      else if (meta.kind === "image") setResult({ kind: "image", src, cached: true });
+      else if (meta.kind === "video")
+        setResult({ kind: "video", src, action: meta.action, profiling: meta.profiling,
+                    jobStatus: "completed", cached: true });
+    }).catch(() => {});
+    return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modeId, config, resetKey]);
 
@@ -598,8 +882,8 @@ export default function App() {
   const knobs = useMemo(() => {
     if (!config || !mode) return [];
     const list = isReason ? config.reason_knobs : config.gen_knobs;
-    // Simulate modes derive num_frames from the action chunk — not a free knob.
-    const actionMode = mode.group === "Simulate";
+    // Action modes derive num_frames from the action chunk — not a free knob.
+    const actionMode = !!mode.action;
     return list.filter((k) => {
       if (k.video && mode.kind !== "video") return false;
       if (actionMode && k.key === "num_frames") return false;
@@ -623,8 +907,6 @@ export default function App() {
     if (!mode) return;
     setError(null); setResult(null); setValidation(null); setStatus("running");
     try {
-      // policy runs autoregressively: the model predicts its own actions each chunk.
-      if (mode.id === "policy") { await rolloutFlow(); return; }
       const res = await generate(mode.id, params, refFile);
       if (res.kind === "text") { setResult({ kind: "text", text: res.text }); setStatus("done"); }
       else if (res.kind === "image") { setResult({ kind: "image", src: res.src }); setStatus("done"); }
@@ -712,10 +994,13 @@ export default function App() {
   if (!config) return <div className="loading">Loading…</div>;
 
   const surfaceModes = config.modes.filter((m) => m.surface === surface && (!simple || SIMPLE_TASKS.has(m.id)));
-  const primaryModes = surfaceModes.filter((m) => m.primary);
-  const moreModes = simple ? [] : surfaceModes.filter((m) => !m.primary);
+  // Generate (Advanced) is organized by downstream scenario: every task lives under
+  // its scenario group, all groups shown at once (no primary-flat row, no collapse).
+  const scenarioNav = surface === "generate" && !simple;
+  const primaryModes = scenarioNav ? [] : surfaceModes.filter((m) => m.primary);
+  const moreModes = simple ? [] : (scenarioNav ? surfaceModes : surfaceModes.filter((m) => !m.primary));
   const moreGroups = [...new Set(moreModes.map((m) => m.group))];
-  const moreOpen = showMore || moreModes.some((m) => m.id === modeId);
+  const moreOpen = scenarioNav ? true : (showMore || moreModes.some((m) => m.id === modeId));
   // forward dynamics derives its frame count from the rollout selection (chunk_size · n + 1).
   const frames = mode?.id === "fwd_dynamics"
     ? (mode.chunk_size || 16) * (Number(params.rollout_chunks) || 1) + 1
@@ -789,14 +1074,28 @@ export default function App() {
             // reconstruction clip, but showing it reads as "it just echoed my video". Surface the
             // trajectory instead and skip the video for action-output modes.
             const actionOut = result?.action?.action_mode === "inverse_dynamics";
+            // Policy and forward dynamics show the video clean — no real-time action-plan bars drawn
+            // over the frame (the trajectory still appears as a chart below).
+            const overlayPlan = !actionOut && result?.action && mode?.id !== "policy" && mode?.id !== "fwd_dynamics";
             return (<>
-              {result?.kind === "image" && result.src && <img className="media" src={result.src} alt="result" />}
-              {result?.kind === "video" && result.src && !actionOut && <video className="media" src={result.src} controls autoPlay loop />}
-              {result?.kind === "text" && <div className="answer"><Markdown text={result.text} /></div>}
-              {actionOut && result?.action && <ActionTrajectory action={result.action} />}
-              {result?.action && !actionOut && (
-                <div className="action-box"><b>action</b> · mode={result.action.action_mode} · shape={JSON.stringify(result.action.shape)} · dtype={result.action.dtype} · domain={result.action.domain_id}</div>
+              {result?.cached && status !== "running" && (
+                <div className="cached-badge">cached example · press {isReason ? "Analyze" : "Generate"} to run live</div>
               )}
+              {result?.kind === "image" && result.src && <img className="media" src={result.src} alt="result" />}
+              {result?.kind === "video" && result.src && !actionOut && !overlayPlan && <video className="media" src={result.src} controls autoPlay loop />}
+              {result?.kind === "video" && result.src && overlayPlan && (
+                <ActionPlanOverlay action={result.action} videoUrl={result.src} fps={Number(params.fps) || 10} />
+              )}
+              {result?.kind === "text" && <div className="answer"><Markdown text={result.text} /></div>}
+              {actionOut && result?.action && (<>
+                {refUrl && <EgoMotionOverlay action={result.action} videoUrl={refUrl} fps={Number(params.fps) || 10} />}
+                <ActionTrajectory action={result.action} />
+              </>)}
+              {result?.action && !actionOut && (<>
+                <div className="action-box"><b>action</b> · mode={result.action.action_mode} · shape={JSON.stringify(result.action.shape)} · dtype={result.action.dtype} · domain={result.action.domain_id}</div>
+                <ActionTrajectory action={result.action}
+                  title={result.action.action_mode === "policy" ? "Predicted action trajectory (model output)" : undefined} />
+              </>)}
               {result?.profiling?.inference_time_s != null && (
                 <div className="profiling">
                   {result.profiling.inference_time_s?.toFixed?.(1)}s
@@ -828,7 +1127,7 @@ export default function App() {
                   <button key={m.id} className={"tab" + (m.id === modeId ? " active" : "")}
                     onClick={() => setModeId(m.id)} title={m.blurb}>{m.label}</button>
                 ))}
-                {moreModes.length > 0 && (
+                {moreModes.length > 0 && !scenarioNav && (
                   <button type="button" className="more-toggle" aria-expanded={moreOpen}
                     onClick={() => setShowMore((v) => !v)}>
                     <span className={"chev" + (moreOpen ? " open" : "")}><IconChevron /></span>

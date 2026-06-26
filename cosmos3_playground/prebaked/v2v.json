@@ -1,0 +1,10 @@
+{
+  "kind": "video",
+  "media": "v2v.mp4",
+  "profiling": {
+    "inference_time_s": 79.29750218335539,
+    "peak_memory_mb": 48186.0
+  },
+  "mode": "v2v",
+  "baked_seconds": 81.7
+}

@@ -1,0 +1,114 @@
+{
+  "subjects": [
+    {
+      "description": "A large industrial crucible (ladle) made of heavy steel, blackened and scorched from repeated use, with a wide rim tilted to pour. Its interior glows incandescent orange-yellow from the molten metal it contains.",
+      "appearance_details": "Riveted metal body, reinforcement bands, heat-scarred exterior with rust and slag crust, bright emissive opening at the pouring lip",
+      "relationship": "Primary source of the molten metal stream flowing into the mold below",
+      "location": "Top-left of frame",
+      "relative_size": "Large within frame",
+      "orientation": "Tilted forward and downward, spout angled toward the mold",
+      "pose": "Suspended and tipped for pouring",
+      "action": "Pouring molten metal in a continuous stream",
+      "state_changes": "No significant change; steady pour maintained throughout.",
+      "clothing": "",
+      "expression": "",
+      "gender": "",
+      "age": "",
+      "skin_tone_and_texture": "",
+      "facial_features": "",
+      "number_of_subjects": 1,
+      "number_of_arms": 0,
+      "number_of_legs": 0
+    },
+    {
+      "description": "A long vertical stream of molten metal flowing from the crucible to the mold, glowing with fierce orange, yellow, and near-white hues, throwing off a constant shower of sparks.",
+      "appearance_details": "Liquid, ribbon-like stream with shimmering luminous surface, pulsing brightness, sparks arcing outward and falling in bright trails",
+      "relationship": "Connects crucible to mold; central visual element of the scene",
+      "location": "Center of frame, extending vertically",
+      "relative_size": "Large within frame",
+      "orientation": "Flowing downward",
+      "pose": "Elongated vertical column of liquid metal",
+      "action": "Cascading steadily into the mold with sparks scattering outward",
+      "state_changes": "No significant change; continuous flow and sparking.",
+      "clothing": "",
+      "expression": "",
+      "gender": "",
+      "age": "",
+      "skin_tone_and_texture": "",
+      "facial_features": "",
+      "number_of_subjects": 1,
+      "number_of_arms": 0,
+      "number_of_legs": 0
+    },
+    {
+      "description": "A heavy industrial mold receiving the molten metal, its rim glowing from the intense heat as the liquid fills it.",
+      "appearance_details": "Thick steel sides, scorched surfaces, incandescent pool forming at the top, splashes and sparks erupting on impact",
+      "relationship": "Receiver of the molten stream from the crucible above",
+      "location": "Lower center of frame",
+      "relative_size": "Medium within frame",
+      "orientation": "Facing upward to receive pour",
+      "pose": "Stationary, fixed in place",
+      "action": "Being filled with molten metal; emitting sparks at the impact point",
+      "state_changes": "No significant change; fill level rises imperceptibly.",
+      "clothing": "",
+      "expression": "",
+      "gender": "",
+      "age": "",
+      "skin_tone_and_texture": "",
+      "facial_features": "",
+      "number_of_subjects": 1,
+      "number_of_arms": 0,
+      "number_of_legs": 0
+    }
+  ],
+  "background_setting": "The interior of a heavy steel mill or foundry, filled with industrial machinery: support girders, catwalks, overhead gantries, conveyor belts, pipes, and control equipment. The space is cavernous and dim, with silhouetted structures receding into the darkness, all bathed in the warm orange glow cast by the molten metal. Residual smoke and heat haze drift through the air.",
+  "lighting": {
+    "conditions": "Low ambient industrial lighting dominated by the intense incandescent glow of the molten metal",
+    "direction": "Primary light source emanates from the pouring stream at center-left, radiating outward",
+    "shadows": "Deep, long shadows cast behind machinery; harsh contrast between glowing foreground and dark background",
+    "illumination_effect": "Dramatic chiaroscuro bathing the entire scene in warm orange and amber tones, with flickering highlights from sparks"
+  },
+  "aesthetics": {
+    "composition": "Diagonal flow from upper-left crucible down to lower-center mold, with the glowing stream as the visual spine of the frame; dark industrial structures frame the scene",
+    "color_scheme": "Dominant fiery oranges, yellows, and whites at the molten stream; deep blacks, charcoals, and rust browns in the surroundings",
+    "mood_atmosphere": "Intense, powerful, industrial, dangerous, hypnotic",
+    "patterns": ""
+  },
+  "cinematography": {
+    "camera_motion": "Static",
+    "framing": "Wide shot",
+    "camera_angle": "Eye-level",
+    "depth_of_field": "Deep",
+    "focus": "Sharp focus on the molten stream and pouring point",
+    "lens_focal_length": "Standard wide-angle, approximately 28-35mm equivalent"
+  },
+  "style_medium": "Live-action video",
+  "artistic_style": "Realistic industrial documentary cinematography",
+  "context": "Documentation of a steel mill casting operation where molten metal is poured from a ladle into a mold",
+  "actions": [
+    {
+      "time": "0:00-0:05",
+      "description": "The crucible steadily pours a glowing stream of molten metal into the mold below, with sparks continuously scattering outward from the impact point."
+    }
+  ],
+  "text_and_signage_elements": [],
+  "segments": [
+    {
+      "segment_index": 0,
+      "time_range": "0:00-0:05",
+      "description": "A wide static view of a foundry interior as a tilted crucible pours a continuous stream of incandescent molten metal into a waiting mold. Sparks fly in bright arcs around the pouring point, and the surrounding machinery is silhouetted and lit by the fiery glow.",
+      "key_changes": "No significant changes; the pour and sparks continue uniformly throughout.",
+      "camera": "Static locked-off shot with no movement"
+    }
+  ],
+  "transitions": [],
+  "temporal_caption": "From 0:00 to 0:05, the scene remains a continuous, steady industrial pour: molten metal flows from the tilted crucible at the upper left in a glowing vertical stream down into the mold at the lower center. Sparks burst outward constantly from the point where the metal strikes the mold, radiating in bright arcs. The surrounding machinery, conveyor belt system, and structural supports remain bathed in warm orange light throughout, with no change in camera position or in the progress of the pour.",
+  "audio_description": "A low, constant roar of flowing molten metal dominates the soundscape, layered with crackling and hissing from sparks, the deep hum of industrial machinery, distant clanking of metal, and the faint whoosh of heat and air currents within the mill.",
+  "resolution": {
+    "W": 1280,
+    "H": 720
+  },
+  "aspect_ratio": "16,9",
+  "duration": "5s",
+  "fps": 24
+}

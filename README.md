@@ -19,10 +19,10 @@ One unified interface over the two Cosmos3 surfaces from the official cookbook:
 **Generate** (diffusion → media), against a vLLM-Omni Cosmos3 server:
 | Group | Modes |
 |---|---|
-| **Imagine** | Text → Image, Text → Video |
-| **Animate** | Image → Video |
-| **Edit** | Video → Video, Transfer (edge / blur / depth / seg / wsm) |
-| **Simulate** | Forward dynamics (action → future video), Inverse dynamics (video → action trajectory) |
+| **World Model** | Text → Image, Text → Video, Image → Video, Video → Video |
+| **Sim2Real (SDG)** | Transfer · Sim→Real (edge / blur / depth / seg / wsm control) |
+| **Robotics** | Forward dynamics (first frame + action plan → future video), Policy (first frame + instruction → predicted actions + manipulation video) |
+| **Autonomous Driving** | Inverse dynamics (video → ego-motion / action trajectory) |
 | — | + **Generate sound** toggle (muxed AAC) on any video mode |
 
 **Reason** (world understanding → text), against an OpenAI-compatible vLLM reasoner:
@@ -30,10 +30,25 @@ One unified interface over the two Cosmos3 surfaces from the official cookbook:
 |---|---|
 | **Reason** | Captioning · Temporal localization · 2D grounding · Physical reasoning · Ask anything |
 
-Each mode **pre-loads its official example** (prompt + recommended settings + reference,
-sourced from the `nvidia/Cosmos3-Nano` model card) so you can just hit **Generate** /
-**Analyze**. Plus: live **progress bar** with ETA for async video jobs, an **action-tensor
-viewer** for dynamics, a **reference preview** (image/video), and server profiling.
+Each mode **pre-loads its official example** (prompt + paper-aligned settings + reference,
+from the Cosmos3 paper / `cosmos-framework` inference defaults) so you can just hit
+**Generate** / **Analyze**. Video generation also applies the paper's **B.6 structured
+negative prompt** by default (Text2Image and action/dynamics modes use the null string,
+matching the framework's `sample_args.json`).
+
+**Cached example gallery.** Opening the URL shows each mode's **pre-baked output by
+default** — no waiting — with a *"cached example · press Generate to run live"* badge.
+Pressing Generate re-runs the mode live and replaces it. Bake the gallery once with the
+server running:
+```bash
+python -m cosmos3_playground.prebake --base http://127.0.0.1:8800   # all modes
+# --only t2i,policy   subset    ·   --skip transfer   all but these
+```
+This drives the same API as the Generate button and saves each result under
+`cosmos3_playground/prebaked/` (served via `GET /api/example/{mode}/result`).
+
+Plus: live **progress bar** with ETA for async video jobs, an **action-tensor / trajectory
+viewer** for dynamics and policy, a **reference preview** (image/video), and server profiling.
 
 ## Architecture
 
@@ -95,9 +110,12 @@ out-of-process via the `cosmos3-playground` command against a running server.
 
 ## Roadmap
 
-- [x] Generate: Imagine / Animate / Edit / Sound
-- [x] Simulate: forward / inverse dynamics (action-tensor viewer)
+- [x] World Model: Text/Image/Video → Image/Video (+ sound), paper-faithful negative prompt
+- [x] Sim2Real: video Transfer (edge / blur / depth / seg / wsm)
+- [x] Robotics: forward dynamics + Policy (model-predicted action rollout)
+- [x] Autonomous Driving: inverse dynamics (ego-motion trajectory viewer)
 - [x] Reason: captioning / temporal localization / grounding / physical reasoning (decoupled reasoner)
+- [x] Cached example gallery (pre-baked outputs, regenerate on demand)
 - [ ] Robot control loop (OpenPI WebSocket)
 - [ ] Cosmos3-Super multi-GPU presets, fp8 toggle surfaced in UI
 - [ ] Grounding box overlay on the reasoned image

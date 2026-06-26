@@ -30,6 +30,7 @@ from cosmos3_playground import __version__, modes
 from cosmos3_playground.cosmos_client import CosmosClient, ReasonerClient
 
 STATIC_DIR = Path(__file__).parent / "static"
+PREBAKE_DIR = Path(__file__).parent / "prebaked"
 
 
 def _gen_topology() -> dict[str, Any]:
@@ -75,6 +76,7 @@ def create_app(
     app = FastAPI(title="Cosmos3 Playground", version=__version__, lifespan=lifespan)
     app.state.model = model
     app.state.policy_model = policy_model
+    app.state.reasoner_model = reasoner_model
     app.state.rollouts = {}  # rollout_id -> {status, chunk, total, error, path}
 
     @app.get("/api/config")
@@ -151,6 +153,7 @@ def create_app(
                 p["size"] = min(buckets.items(), key=lambda kv: abs(kv[0] - w / h))[1]
             except Exception:  # noqa: BLE001 — fall back to the requested values on decode failure
                 pass
+
         try:
             req = modes.build_request(mode, p)
         except ValueError as err:
@@ -217,8 +220,10 @@ def create_app(
             frame_lists = []
             prev_video: bytes | None = None
             fps = 10
-            client = policy_gen if mode == "policy" else gen
-            model_name = app.state.policy_model if mode == "policy" else app.state.model
+            # The robot (bridge) policy runs on the base generator, like forward dynamics;
+            # the dedicated DROID checkpoint (policy_gen) is not used by the current example.
+            client = gen
+            model_name = app.state.model
             for i in range(n):
                 st["chunk"] = i + 1
                 # policy predicts its own actions each chunk; forward dynamics replays chunk i.
@@ -248,8 +253,8 @@ def create_app(
                             reference: UploadFile | None = None) -> dict[str, Any]:
         """Start an autoregressive forward-dynamics rollout: generate one action chunk at a
         time, conditioning each on the previous chunk's last frame, then stitch the clips."""
-        if mode not in ("fwd_dynamics", "policy"):
-            raise HTTPException(status_code=400, detail="rollout is only for forward dynamics or policy")
+        if mode != "fwd_dynamics":
+            raise HTTPException(status_code=400, detail="rollout is only for forward dynamics")
         if reference is None:
             raise HTTPException(status_code=400, detail="rollout needs a first-frame image")
         try:
@@ -363,6 +368,34 @@ def create_app(
         if path is None:
             raise HTTPException(status_code=404, detail="no example reference for this mode")
         # no-store so swapping an example asset takes effect immediately (path is constant).
+        return FileResponse(str(path), headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/example/{mode_id}/result")
+    async def example_result(mode_id: str) -> dict[str, Any]:
+        """Pre-baked output for this mode, shown by default until the user regenerates.
+        Produced offline by `python -m cosmos3_playground.prebake`."""
+        meta = PREBAKE_DIR / f"{mode_id}.json"
+        if not meta.is_file():
+            raise HTTPException(status_code=404, detail="no pre-baked result for this mode")
+        try:
+            return json.loads(meta.read_text())
+        except (OSError, json.JSONDecodeError) as err:
+            raise HTTPException(status_code=500, detail=f"bad pre-baked meta: {err}") from err
+
+    @app.get("/api/example/{mode_id}/result/content")
+    async def example_result_content(mode_id: str) -> FileResponse:
+        meta_path = PREBAKE_DIR / f"{mode_id}.json"
+        if not meta_path.is_file():
+            raise HTTPException(status_code=404, detail="no pre-baked result for this mode")
+        try:
+            media = json.loads(meta_path.read_text()).get("media")
+        except (OSError, json.JSONDecodeError):
+            media = None
+        if not media:
+            raise HTTPException(status_code=404, detail="this pre-baked result has no media")
+        path = PREBAKE_DIR / media
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="pre-baked media missing")
         return FileResponse(str(path), headers={"Cache-Control": "no-store"})
 
     if STATIC_DIR.is_dir():
