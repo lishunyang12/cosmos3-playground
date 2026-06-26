@@ -106,21 +106,29 @@ MODES: list[dict[str, Any]] = [
     {"id": "t2i", "label": "Text → Image", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "image", "reference": "none", "blurb": "Generate a still image from a prompt.",
      "io": "Prompt → image", "key_knobs": ["size", "guidance_scale"],
-     # Official Cosmos3 example (paper inputs/omni/t2i.json): robotics-lab scene, structured caption.
-     "example": {"prompt": _ex_prompt("t2i"), "params": _IMAGE_DEFAULTS, "reference": None}},
+     # Official Cosmos3 example (paper inputs/omni/t2i.json). Short prompt; the Reasoner upsamples it.
+     "example": {"prompt": "A medium shot of a modern robotics research lab: a metallic robotic arm on a "
+                 "white workbench above a row of small colored blocks, a laptop beside it, a wall monitor "
+                 "showing a software UI, bright overhead lighting.",
+                 "params": _IMAGE_DEFAULTS, "reference": None}},
     {"id": "t2v", "label": "Text → Video", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "video", "reference": "none", "blurb": "Imagine a video world from a prompt.",
      "io": "Prompt → video (with optional sound)", "key_knobs": ["size", "num_frames", "generate_sound"],
-     # Official Cosmos3 example (paper inputs/omni/t2v.json): foundry molten-metal pour, structured caption.
+     # Official Cosmos3 example (paper inputs/omni/t2v.json). Short prompt; the Reasoner upsamples it.
      # No negative_prompt → backend applies the paper B.6 structured negative prompt by default.
-     "example": {"prompt": _ex_prompt("t2v"),
+     "example": {"prompt": "A large industrial crucible pours a continuous glowing stream of molten metal "
+                 "into a mold below, sparks scattering from the impact, inside a dark steel-mill foundry; "
+                 "static wide shot.",
                  "params": {**_T2V_PAPER, "generate_sound": False},
                  "reference": None}},
     {"id": "i2v", "label": "Image → Video", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "video", "reference": "image", "blurb": "Animate a still image into a video.",
      "io": "Image + prompt → video", "key_knobs": ["num_frames"],
-     # Official Cosmos3 example (paper inputs/omni/i2v.json): dual-arm manipulation demo (robot_153.jpg).
-     "example": {"prompt": _ex_prompt("i2v"), "params": {**_T2V_PAPER}, "reference": "i2v_robot.jpg"}},
+     # Official Cosmos3 example (paper inputs/omni/i2v.json). Short prompt; the Reasoner upsamples it
+     # using the first frame as visual ground truth.
+     "example": {"prompt": "The right robotic arm reaches up, picks the red ball off the top shelf, lowers "
+                 "it onto the bottom shelf, then retracts, while the left arm stays still.",
+                 "params": {**_T2V_PAPER}, "reference": "i2v_robot.jpg"}},
     {"id": "v2v", "label": "Video → Video", "surface": "generate", "group": "World Model",
      "kind": "video", "reference": "video", "blurb": "Future prediction: keep the opening frames, generate what happens next.",
      "io": "Video (opening frames) + prompt → continuation", "key_knobs": ["num_frames"],

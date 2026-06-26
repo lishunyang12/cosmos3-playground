@@ -26,7 +26,7 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from cosmos3_playground import __version__, modes
+from cosmos3_playground import __version__, modes, upsampler
 from cosmos3_playground.cosmos_client import CosmosClient, ReasonerClient
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -75,6 +75,7 @@ def create_app(
     app = FastAPI(title="Cosmos3 Playground", version=__version__, lifespan=lifespan)
     app.state.model = model
     app.state.policy_model = policy_model
+    app.state.reasoner_model = reasoner_model
     app.state.rollouts = {}  # rollout_id -> {status, chunk, total, error, path}
 
     @app.get("/api/config")
@@ -151,6 +152,31 @@ def create_app(
                 p["size"] = min(buckets.items(), key=lambda kv: abs(kv[0] - w / h))[1]
             except Exception:  # noqa: BLE001 — fall back to the requested values on decode failure
                 pass
+
+        # ---- Prompt upsampling (Cosmos3 two-stage): short NL prompt -> structured caption ----
+        # The generator is trained on the dense JSON caption; the Reasoner expands the user's
+        # short prompt into it. Skip if no reasoner, or if the prompt already looks upsampled.
+        if mode in ("t2i", "t2v", "i2v") and reasoner.configured:
+            raw = (p.get("prompt") or "").strip()
+            if raw and not upsampler.is_upsampled_prompt(raw):
+                umode = {"t2i": "text2image", "t2v": "text2video", "i2v": "image2video"}[mode]
+                size = p.get("size") or "1280x720"
+                fps = int(p.get("fps") or 24)
+                nf = int(p.get("num_frames") or 189)
+                img_url = None
+                if mode == "i2v" and reference is not None:
+                    if ref_bytes is None:
+                        ref_bytes = await reference.read()
+                    import mimetypes
+                    mime = reference.content_type or mimetypes.guess_type(reference.filename or "")[0] or "image/jpeg"
+                    img_url = f"data:{mime};base64,{base64.b64encode(ref_bytes).decode()}"
+                try:
+                    up = await reasoner.chat(
+                        upsampler.build_payload(umode, raw, size, fps, nf, app.state.reasoner_model, img_url))
+                    p["prompt"] = upsampler.parse_upsampled(up, umode, size, fps, nf)
+                except (httpx.HTTPError, ValueError, json.JSONDecodeError, KeyError):
+                    pass  # fall back to the raw natural-language prompt if upsampling fails
+
         try:
             req = modes.build_request(mode, p)
         except ValueError as err:
