@@ -204,15 +204,17 @@ MODES: list[dict[str, Any]] = [
      "flow": {"inputs": ["first frame", "instruction"], "output": "predicted manipulation video"},
      "notes": [["model decides", "the action trajectory from the instruction"],
                ["rolls out", "one coherent manipulation (single shot) — try different instructions"]],
+     "extra": [{"key": "num_frames", "label": "Frames", "type": "int", "widget": "slider",
+                "min": 17, "max": 200, "step": 1, "default": 90, "unit": "f"}],
      # HD, cluttered manipulation scene (apple, banana, mug, blocks, can, plate) so many instructions work:
      # "pick up the red apple…", "move the blue mug…", "stack the blocks…". bridge_orig_lerobot embodiment,
      # 10-D action (pos+rot6d+gripper), 5 fps, single 32-step chunk. Runs on the base generator.
      "example": {"prompt": "Pick up the red apple and place it on the plate.",
-                 # guidance/flow_shift 6 sharpens the HD rollout; fps 15 = smooth playback.
-                 # 89-step chunk → 90 frames (6s @ 15fps): coherent and ~2x faster to generate than 150.
+                 # guidance/flow_shift 6 sharpens the HD rollout; fps 15 = smooth playback. Frames is a
+                 # user slider (default 90 = 6s @ 15fps); the action chunk is derived as num_frames - 1.
                  "params": {"size": "1280x720", "fps": 15, "num_inference_steps": 50, "guidance_scale": 6.0,
                             "flow_shift": 6.0, "domain_name": "bridge_orig_lerobot", "raw_action_dim": 10,
-                            "action_chunk_size": 89},
+                            "num_frames": 90},
                  "reference": "policy_robot_scene.png", "action": "policy"}},
     # ---- REASON ----
     {"id": "caption", "label": "Captioning", "surface": "reason", "group": "Reason", "primary": True,
@@ -396,15 +398,15 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
         nf = _num(params, "num_frames", int)
         fields["num_frames"] = nf if nf in (chunk, chunk + 1) else (chunk + 1)
     elif mode_id == "policy":
-        # Single-shot planning policy (official AV example): the model predicts its own
-        # action trajectory + rolls out the future drive. Runs on the base generator.
-        chunk = int(params.get("action_chunk_size") or 60)
+        # Single-shot planning policy: the model predicts its own action trajectory + rolls
+        # out the future. Runs on the base generator. The user-adjustable Frames slider sets
+        # num_frames; the action chunk is num_frames - 1 (pipeline needs num_frames == chunk+1).
+        nf = _num(params, "num_frames", int)
+        chunk = (nf - 1) if (nf and nf > 1) else int(params.get("action_chunk_size") or 60)
         extra_params.update({"action_mode": "policy",
                              "domain_name": params.get("domain_name") or "av",
                              "action_chunk_size": chunk,
                              "raw_action_dim": int(params.get("raw_action_dim") or 9)})
-        # num_frames is fixed by the prediction horizon (first frame + chunk steps); the
-        # pipeline requires it to equal chunk or chunk+1, so ignore any leaked UI value.
         fields["num_frames"] = chunk + 1
 
     # action modes read the predicted/echoed action back from the async job, like the cookbook.
