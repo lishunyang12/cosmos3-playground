@@ -17,6 +17,75 @@ function fmt(sec) {
 
 // Inverse-dynamics (and any action-output mode) returns a [T, D] trajectory, not a clip.
 // Surface it as a motion-profile plot + a numeric table + a full-data download.
+// Overlay the recovered/predicted ego-motion as an arrow drawn on the clip itself:
+// heading = direction of travel (lateral vs forward), length ∝ ‖motion‖ (speed),
+// redrawn each frame in sync with playback.
+function EgoMotionOverlay({ action, videoUrl, fps }) {
+  const shape = action.shape || [];
+  const d = action.data;
+  const cols = shape[1] || (Array.isArray(d?.[0]) ? d[0].length : 1);
+  let rows = [];
+  if (Array.isArray(d) && Array.isArray(d[0])) rows = d;
+  else if (Array.isArray(d)) for (let i = 0; i < d.length; i += cols) rows.push(d.slice(i, i + cols));
+  const n = rows.length;
+  const vref = useRef(null), cref = useRef(null);
+  const [hud, setHud] = useState({ fr: 0, x: 0, z: 0, mag: 0 });
+  const maxMag = useMemo(
+    () => Math.max(1e-6, ...rows.map((r) => Math.hypot(Number(r[0] || 0), Number(r[2] || 0)))),
+    [rows]
+  );
+  useEffect(() => {
+    let raf;
+    const draw = () => {
+      const v = vref.current, c = cref.current;
+      if (v && c && c.clientWidth) {
+        const W = (c.width = c.clientWidth), H = (c.height = c.clientHeight);
+        const fr = Math.min(n - 1, Math.max(0, Math.round((v.currentTime || 0) * fps)));
+        const r = rows[fr] || [];
+        const x = Number(r[0] || 0), z = Number(r[2] || 0), mag = Math.hypot(x, z);
+        const phi = Math.atan2(x, Math.abs(z) < 1e-6 ? 1e-6 : z);
+        const ctx = c.getContext("2d");
+        ctx.clearRect(0, 0, W, H);
+        const ox = W / 2, oy = H * 0.9;
+        const L = (0.12 + 0.55 * (mag / maxMag)) * H;
+        const tx = ox + Math.sin(phi) * L, ty = oy - Math.cos(phi) * L;
+        ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox, oy - 0.12 * H); ctx.stroke();
+        const hue = 140 - 140 * Math.min(1, mag / maxMag);
+        ctx.strokeStyle = `hsl(${hue} 90% 55%)`; ctx.fillStyle = ctx.strokeStyle;
+        ctx.lineWidth = Math.max(3, H * 0.014); ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(tx, ty); ctx.stroke();
+        const ah = Math.max(9, H * 0.05), a = Math.atan2(ty - oy, tx - ox);
+        ctx.beginPath(); ctx.moveTo(tx, ty);
+        ctx.lineTo(tx - ah * Math.cos(a - 0.42), ty - ah * Math.sin(a - 0.42));
+        ctx.lineTo(tx - ah * Math.cos(a + 0.42), ty - ah * Math.sin(a + 0.42));
+        ctx.closePath(); ctx.fill();
+        if (fr !== hud.fr) setHud({ fr, x, z, mag });
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [rows, n, fps, maxMag, hud.fr]);
+
+  return (
+    <div className="trajectory">
+      <div className="traj-head">
+        <span className="traj-title">Recovered ego-motion on the clip</span>
+        <span className="traj-meta">frame {hud.fr}/{n - 1}</span>
+      </div>
+      <div className="ego-wrap">
+        <video ref={vref} className="ego-video" src={videoUrl} controls autoPlay loop muted playsInline />
+        <canvas ref={cref} className="ego-ov" />
+      </div>
+      <div className="traj-cap">
+        arrow = recovered ego-motion · direction = heading (forward + lateral) · length ∝ ‖motion‖ (speed),
+        green→red · plays in sync · forward {hud.z.toFixed(3)} · lateral {hud.x.toFixed(3)} · ‖motion‖ {hud.mag.toFixed(3)}
+      </div>
+    </div>
+  );
+}
+
 function ActionTrajectory({ action, title }) {
   const shape = action.shape || [];
   const d = action.data;
@@ -857,7 +926,10 @@ export default function App() {
               {result?.kind === "image" && result.src && <img className="media" src={result.src} alt="result" />}
               {result?.kind === "video" && result.src && !actionOut && <video className="media" src={result.src} controls autoPlay loop />}
               {result?.kind === "text" && <div className="answer"><Markdown text={result.text} /></div>}
-              {actionOut && result?.action && <ActionTrajectory action={result.action} />}
+              {actionOut && result?.action && (<>
+                {refUrl && <EgoMotionOverlay action={result.action} videoUrl={refUrl} fps={Number(params.fps) || 10} />}
+                <ActionTrajectory action={result.action} />
+              </>)}
               {result?.action && !actionOut && (
                 <div className="action-box"><b>action</b> · mode={result.action.action_mode} · shape={JSON.stringify(result.action.shape)} · dtype={result.action.dtype} · domain={result.action.domain_id}</div>
               )}
