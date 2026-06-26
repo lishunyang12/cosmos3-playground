@@ -30,8 +30,8 @@ _VIDEO_DEFAULTS = {
     "size": "1280x720", "num_frames": 93, "fps": 24,
     "num_inference_steps": 50, "guidance_scale": 6.0, "flow_shift": 10.0,
 }
-# Image is the audio-visual model's still-frame mode → same guidance=6 as Table 21.
-_IMAGE_DEFAULTS = {"size": "1024x1024", "num_inference_steps": 50, "guidance_scale": 6.0}
+# text2image paper defaults: steps 50, guidance 4.0 (shift 3.0 is the pipeline T2I default), 1:1 960x960.
+_IMAGE_DEFAULTS = {"size": "960x960", "num_inference_steps": 50, "guidance_scale": 4.0}
 # Forward/inverse dynamics (Table 21): steps=50, guidance=1, shift=5, full-range CFG,
 # null negative prompt. Action envelope: 10-30 FPS, 16-400 frame horizon (§6.3.1).
 _ACTION_DEFAULTS = {"size": "832x480", "fps": 10, "num_inference_steps": 50, "guidance_scale": 1.0, "flow_shift": 5.0}
@@ -82,37 +82,45 @@ _FD_SPEC = json.loads((EXAMPLES_DIR / "fd_action_chunks.json").read_text())
 _FD_CHUNK = int(_FD_SPEC.get("action_chunk_size", 16))
 _FD_NCHUNKS = int(_FD_SPEC.get("num_chunks", len(_FD_SPEC.get("action_chunks", [[]]))))
 
+
+def _ex_prompt(name: str) -> str:
+    """The official structured-caption prompt for an example (verbatim from the paper's
+    inputs/omni/{name}.json). The model is trained on these JSON captions, so feeding them
+    directly reproduces the reference output without a separate prompt-upsampling step."""
+    try:
+        return (EXAMPLES_DIR / f"prompt_{name}.txt").read_text().strip()
+    except OSError:
+        return ""
+
+
+# Paper inference defaults (cosmos_framework/inference/defaults/*/sample_args.json):
+#   text2image : steps 50, guidance 4.0, shift 3.0, 1:1 (960x960)
+#   text2video : steps 35, guidance 6.0, shift 10.0, 16:9 (1280x720), fps 24, 189 frames
+#   image2video: steps 35, guidance 6.0, shift 10.0, 16:9 (1280x720), fps 24, 189 frames
+_T2V_PAPER = {"size": "1280x720", "fps": 24, "num_inference_steps": 35, "guidance_scale": 6.0,
+              "flow_shift": 10.0, "num_frames": 189}
+
 # ----------------------------------------------------------------------------- modes
 MODES: list[dict[str, Any]] = [
     # ---- GENERATE ----
     {"id": "t2i", "label": "Text → Image", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "image", "reference": "none", "blurb": "Generate a still image from a prompt.",
      "io": "Prompt → image", "key_knobs": ["size", "guidance_scale"],
-     "example": {"prompt": "Photorealistic close-up of a brushed-titanium robotic hand with exposed servos "
-                 "gently cradling a fresh dewy strawberry, soft window light, razor-sharp focus on the fruit's "
-                 "seeds and the metal's micro-scratches, shallow depth of field, studio product photography",
-                 "params": _IMAGE_DEFAULTS, "reference": None}},
+     # Official Cosmos3 example (paper inputs/omni/t2i.json): robotics-lab scene, structured caption.
+     "example": {"prompt": _ex_prompt("t2i"), "params": _IMAGE_DEFAULTS, "reference": None}},
     {"id": "t2v", "label": "Text → Video", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "video", "reference": "none", "blurb": "Imagine a video world from a prompt.",
      "io": "Prompt → video (with optional sound)", "key_knobs": ["size", "num_frames", "generate_sound"],
-     "example": {"prompt": "A lone surfer drops into a towering turquoise wave at golden hour; the lip throws "
-                 "over into a glassy barrel, offshore wind feathering spray off the crest, water rushing past "
-                 "with physically accurate fluid dynamics, cinematic tracking shot, photorealistic. Audio "
-                 "description: the deep roar of the breaking wave, the hiss of wind-blown spray, the board "
-                 "carving through water.",
-                 # sound defaults OFF: under a sequence-parallel (ulysses) deployment the
-                 # video+sound token count must be a multiple of ulysses_degree, which fails for
-                 # many frame counts. Video-only is always safe; sound is an opt-in toggle.
-                 # No negative_prompt → backend applies the paper B.6 structured negative prompt by default.
-                 "params": {**_VIDEO_DEFAULTS, "generate_sound": False},
+     # Official Cosmos3 example (paper inputs/omni/t2v.json): foundry molten-metal pour, structured caption.
+     # No negative_prompt → backend applies the paper B.6 structured negative prompt by default.
+     "example": {"prompt": _ex_prompt("t2v"),
+                 "params": {**_T2V_PAPER, "generate_sound": False},
                  "reference": None}},
     {"id": "i2v", "label": "Image → Video", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "video", "reference": "image", "blurb": "Animate a still image into a video.",
      "io": "Image + prompt → video", "key_knobs": ["num_frames"],
-     "example": {"prompt": "Bring the waterfall to life: water cascades over the rock face and splashes into the "
-                 "pool, the stream ripples over the mossy stones, ferns sway gently, fine mist drifts — natural, "
-                 "physically consistent motion, photorealistic.",
-                 "params": {**_VIDEO_DEFAULTS}, "reference": "i2v_input.jpg"}},
+     # Official Cosmos3 example (paper inputs/omni/i2v.json): dual-arm manipulation demo (robot_153.jpg).
+     "example": {"prompt": _ex_prompt("i2v"), "params": {**_T2V_PAPER}, "reference": "i2v_robot.jpg"}},
     {"id": "v2v", "label": "Video → Video", "surface": "generate", "group": "World Model",
      "kind": "video", "reference": "video", "blurb": "Future prediction: keep the opening frames, generate what happens next.",
      "io": "Video (opening frames) + prompt → continuation", "key_knobs": ["num_frames"],
