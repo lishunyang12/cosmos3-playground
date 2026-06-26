@@ -36,6 +36,27 @@ _IMAGE_DEFAULTS = {"size": "1024x1024", "num_inference_steps": 50, "guidance_sca
 # null negative prompt. Action envelope: 10-30 FPS, 16-400 frame horizon (§6.3.1).
 _ACTION_DEFAULTS = {"size": "832x480", "fps": 10, "num_inference_steps": 50, "guidance_scale": 1.0, "flow_shift": 5.0}
 
+# Action-mode prompt formatting — mirror cosmos-framework's ActionPromptJsonFormatter +
+# action.py so the checkpoints see their trained input distribution: the IMAGE system prompt
+# (is_video=False for action modes) plus a structured JSON caption with the per-domain
+# viewpoint framing. Verified to give a more stable, on-distribution policy rollout than raw
+# free text. The system-prompt string is verbatim from the framework (trained typo "give").
+_ACTION_SYSTEM_PROMPT = "You are a helpful assistant who will generate images from a give prompt."
+_VIEWPOINT_TEMPLATES = {
+    "ego_view": "This video is captured from a first-person perspective looking at the scene.",
+    "third_person_view": "This video is captured from a third-person perspective looking towards the agent from the front.",
+    "wrist_view": "This video is captured from a wrist-mounted camera.",
+    "concat_view": "This video contains concatenated views from multiple camera perspectives.",
+}
+# Canonical viewpoint per embodiment domain (from the cosmos-framework action datasets).
+_DOMAIN_VIEWPOINT = {"droid_lerobot": "concat_view", "av": "ego_view",
+                     "agibotworld": "concat_view", "bridge_orig_lerobot": "ego_view"}
+# Domain-specific framing detail appended after the viewpoint template, verbatim from the dataset.
+_DOMAIN_VIEW_DESC = {
+    "droid_lerobot": ("The top row is from the wrist-mounted camera. The bottom row contains two horizontally "
+                      "concatenated third-person perspective views of the scene from opposite sides, with the robot visible."),
+}
+
 # Default negative prompt for video generation, verbatim from the report's Appendix B.3
 # (the natural-language "DEFAULT NEGATIVE PROMPT"). Table 21 uses the null string for
 # Text2Image and for all action/dynamics modes, so only the video examples carry this.
@@ -374,8 +395,9 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
         fields["num_frames"] = int(_num(params, "num_frames", int) or (chunk + 1))
 
     # forward/inverse dynamics read the action back from the async job, like the cookbook.
-    return {"kind": m["kind"], "reference": m["reference"], "fields": fields, "extra_params": extra_params,
-            "async_action": mode_id in ("fwd_dynamics", "inv_dynamics")}
+    req = {"kind": m["kind"], "reference": m["reference"], "fields": fields, "extra_params": extra_params,
+           "async_action": mode_id in ("fwd_dynamics", "inv_dynamics")}
+    return _apply_action_prompt_format(req)
 
 
 def fd_action(params: dict[str, Any]) -> list[list[float]]:
@@ -387,6 +409,59 @@ def fd_action(params: dict[str, Any]) -> list[list[float]]:
 
 def fd_chunk_count() -> int:
     return len(_FD_SPEC.get("action_chunks", []))
+
+
+def _action_framing(domain: str) -> str | None:
+    """Resolve the cinematography framing text for a domain (viewpoint template +
+    optional domain-specific detail), mirroring ActionPromptJsonFormatter._get_viewpoint_caption."""
+    tmpl = _VIEWPOINT_TEMPLATES.get(_DOMAIN_VIEWPOINT.get(domain, ""))
+    desc = _DOMAIN_VIEW_DESC.get(domain)
+    if tmpl is None:
+        return desc
+    if desc:
+        return tmpl + (" " if tmpl.endswith(".") else ". ") + desc
+    return tmpl
+
+
+def _action_json_caption(prompt: str, domain: str, fps: int, width: int, height: int, num_frames: int) -> str:
+    """Build the structured action JSON caption the action checkpoints were trained on."""
+    secs = (num_frames / fps) if fps else 0.0
+    mm, ss = divmod(int(round(secs)), 60)
+    desc = prompt if prompt[-1:] in ".!?" else prompt + "."
+    cap: dict[str, Any] = {}
+    framing = _action_framing(domain)
+    if framing:
+        cap["cinematography"] = {"framing": framing}
+    cap["actions"] = [{"time": f"0:00-{mm}:{ss:02d}", "description": desc}]
+    cap["duration"] = f"{int(secs)}s"
+    cap["fps"] = float(fps)
+    cap["resolution"] = {"H": int(height), "W": int(width)}
+    g = math.gcd(int(width), int(height)) or 1
+    cap["aspect_ratio"] = f"{int(width) // g},{int(height) // g}"
+    return json.dumps(cap)
+
+
+def _apply_action_prompt_format(req: dict[str, Any]) -> dict[str, Any]:
+    """In-place: make an action request follow the paper's inference format — IMAGE system
+    prompt + structured JSON caption. No-op for non-action requests."""
+    ep = req.get("extra_params") or {}
+    if not ep.get("action_mode"):
+        return req
+    f = req["fields"]
+    raw = (f.get("prompt") or "").strip()
+    if raw and raw != ".":
+        try:
+            w, h = (int(x) for x in str(f.get("size") or _ACTION_DEFAULTS["size"]).lower().split("x"))
+        except (ValueError, AttributeError):
+            w, h = 640, 480
+        f["prompt"] = _action_json_caption(
+            raw, ep.get("domain_name", ""), int(f.get("fps") or 10), w, h, int(f.get("num_frames") or 1)
+        )
+    # Action modes are tokenized with is_video=False → the IMAGE system prompt.
+    ep["use_system_prompt"] = True
+    ep["system_prompt"] = _ACTION_SYSTEM_PROMPT
+    req["extra_params"] = ep
+    return req
 
 
 def fd_single_chunk_request(params: dict[str, Any], idx: int) -> dict[str, Any]:
@@ -406,7 +481,8 @@ def fd_single_chunk_request(params: dict[str, Any], idx: int) -> dict[str, Any]:
     extra = {"use_resolution_template": False, "use_duration_template": False,
              "action_mode": "forward_dynamics", "domain_name": _FD_SPEC.get("domain_name", "agibotworld"),
              "action_chunk_size": len(chunk), "action": chunk}
-    return {"kind": "video", "reference": "image", "fields": fields, "extra_params": extra, "async_action": True}
+    return _apply_action_prompt_format(
+        {"kind": "video", "reference": "image", "fields": fields, "extra_params": extra, "async_action": True})
 
 
 def policy_single_chunk_request(params: dict[str, Any]) -> dict[str, Any]:
@@ -426,7 +502,8 @@ def policy_single_chunk_request(params: dict[str, Any]) -> dict[str, Any]:
     extra = {"use_resolution_template": False, "use_duration_template": False,
              "action_mode": "policy", "domain_name": params.get("domain_name") or "droid_lerobot",
              "raw_action_dim": int(params.get("raw_action_dim") or 8), "action_chunk_size": chunk}
-    return {"kind": "video", "reference": "image", "fields": fields, "extra_params": extra, "async_action": True}
+    return _apply_action_prompt_format(
+        {"kind": "video", "reference": "image", "fields": fields, "extra_params": extra, "async_action": True})
 
 
 def roundtrip_id_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
