@@ -623,8 +623,6 @@ export default function App() {
     if (!mode) return;
     setError(null); setResult(null); setValidation(null); setStatus("running");
     try {
-      // policy runs autoregressively: the model predicts its own actions each chunk.
-      if (mode.id === "policy") { await rolloutFlow(); return; }
       const res = await generate(mode.id, params, refFile);
       if (res.kind === "text") { setResult({ kind: "text", text: res.text }); setStatus("done"); }
       else if (res.kind === "image") { setResult({ kind: "image", src: res.src }); setStatus("done"); }

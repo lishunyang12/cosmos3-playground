@@ -194,27 +194,23 @@ MODES: list[dict[str, Any]] = [
                  "translation and rotation through the scene, frame by frame. The output is a 60×9 action "
                  "trajectory, not a video.",
                  "params": {**_ACTION_DEFAULTS, "num_frames": 61}, "reference": "id_av_input.mp4"}},
-    {"id": "policy", "label": "Policy", "surface": "generate", "group": "Robotics", "action": True,
-     "kind": "video", "reference": "image", "blurb": "Instruction-driven rollout: the model predicts its own "
-     "actions from a first frame + a language goal, and rolls out the video.", "chunk_size": _FD_CHUNK,
+    {"id": "policy", "label": "Policy", "surface": "generate", "group": "Autonomous Driving", "action": True,
+     "kind": "video", "reference": "image", "blurb": "Planning policy: from a single first frame + a role "
+     "instruction the model predicts its own action trajectory and rolls out the future.",
      "io": "First frame + instruction → predicted actions + video",
-     "purpose": "Give it a goal, not a script — the model decides the actions itself and rolls them out, "
-                "chunk by chunk (autoregressive), so it can run long without a hand-authored action plan.",
-     "flow": {"inputs": ["first frame", "instruction"], "output": "actions + video"},
-     "notes": [["model decides", "the action trajectory"],
-               ["rolls out", "autoregressively — each chunk continues the last"]],
-     "extra": [{"key": "rollout_chunks", "label": f"Rollout (×{_FD_CHUNK}-step chunks, autoregressive)", "type": "int",
-                "widget": "slider", "min": 1, "max": 25, "step": 1, "default": 4, "unit": "chunks"}],
-     # Dedicated policy checkpoint Cosmos3-Nano-Policy-DROID: droid_lerobot domain, 8-D
-     # action, 640x480 @ 15 fps, 30 steps. First frame is a matching tabletop scene.
-     # The DROID policy is instruction-conditioned: the goal must name the actual object and
-     # container in the first frame (a banana + a white plate), or the arm hovers without grasping.
-     # 8 chunks (~128 steps) gives it enough horizon to actually pick up and carry the object.
-     "example": {"prompt": "Pick up the banana and place it on the plate.",
-                 "params": {"size": "640x480", "fps": 15, "num_inference_steps": 50, "guidance_scale": 1.0,
-                            "flow_shift": 5.0, "domain_name": "droid_lerobot", "raw_action_dim": 8,
-                            "rollout_chunks": 8},
-                 "reference": "policy_first_frame.png", "action": "policy"}},
+     "purpose": "Give it a role, not a script — the model decides the actions itself and rolls out the "
+                "future. Here it acts as an autonomous-vehicle planner: from one front-camera frame it "
+                "predicts a 60-step driving trajectory and the resulting ~6s of forward driving.",
+     "flow": {"inputs": ["first frame", "instruction"], "output": "predicted driving + actions"},
+     "notes": [["model decides", "the 60-step action trajectory"],
+               ["rolls out", "the predicted future drive (single shot)"]],
+     # Official AV policy example (cosmos-framework inputs/omni/action_policy_av.json): av domain,
+     # ego_view front camera, 9-D action, image_size 480 (832x480), 10 fps, 60-step chunk. Runs on the
+     # base generator (NOT the dedicated DROID checkpoint). First frame is the official 832x480 driving clip.
+     "example": {"prompt": "You are an autonomous vehicle planning system.",
+                 "params": {"size": "832x480", "fps": 10, "num_inference_steps": 50, "guidance_scale": 1.0,
+                            "flow_shift": 5.0, "domain_name": "av", "raw_action_dim": 9},
+                 "reference": "policy_av_first_frame.png", "action": "policy"}},
     # ---- REASON ----
     {"id": "caption", "label": "Captioning", "surface": "reason", "group": "Reason", "primary": True,
      "kind": "text", "reference": "image", "blurb": "Detailed description of an image or video.",
@@ -393,10 +389,19 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
                              "action_chunk_size": chunk,
                              "raw_action_dim": int(params.get("raw_action_dim") or 9)})
         fields["num_frames"] = int(_num(params, "num_frames", int) or (chunk + 1))
+    elif mode_id == "policy":
+        # Single-shot planning policy (official AV example): the model predicts its own
+        # action trajectory + rolls out the future drive. Runs on the base generator.
+        chunk = int(params.get("action_chunk_size") or 60)
+        extra_params.update({"action_mode": "policy",
+                             "domain_name": params.get("domain_name") or "av",
+                             "action_chunk_size": chunk,
+                             "raw_action_dim": int(params.get("raw_action_dim") or 9)})
+        fields["num_frames"] = int(_num(params, "num_frames", int) or (chunk + 1))
 
-    # forward/inverse dynamics read the action back from the async job, like the cookbook.
+    # action modes read the predicted/echoed action back from the async job, like the cookbook.
     req = {"kind": m["kind"], "reference": m["reference"], "fields": fields, "extra_params": extra_params,
-           "async_action": mode_id in ("fwd_dynamics", "inv_dynamics")}
+           "async_action": mode_id in ("fwd_dynamics", "inv_dynamics", "policy")}
     return _apply_action_prompt_format(req)
 
 
