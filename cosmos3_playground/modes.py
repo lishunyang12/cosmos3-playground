@@ -194,23 +194,24 @@ MODES: list[dict[str, Any]] = [
                  "translation and rotation through the scene, frame by frame. The output is a 60×9 action "
                  "trajectory, not a video.",
                  "params": {**_ACTION_DEFAULTS, "num_frames": 61, "action_chunk_size": 60}, "reference": "inv_av_official.mp4"}},
-    {"id": "policy", "label": "Policy", "surface": "generate", "group": "Autonomous Driving", "action": True,
-     "kind": "video", "reference": "image", "blurb": "Planning policy: from a single first frame + a role "
-     "instruction the model predicts its own action trajectory and rolls out the future.",
-     "io": "First frame + instruction → predicted actions + video",
-     "purpose": "Give it a role, not a script — the model decides the actions itself and rolls out the "
-                "future. Here it acts as an autonomous-vehicle planner: from one front-camera frame it "
-                "predicts a 60-step driving trajectory and the resulting ~6s of forward driving.",
-     "flow": {"inputs": ["first frame", "instruction"], "output": "predicted driving + actions"},
-     "notes": [["model decides", "the 60-step action trajectory"],
-               ["rolls out", "the predicted future drive (single shot)"]],
-     # Official AV policy example (cosmos-framework inputs/omni/action_policy_av.json): av domain,
-     # ego_view front camera, 9-D action, image_size 480 (832x480), 10 fps, 60-step chunk. Runs on the
-     # base generator (NOT the dedicated DROID checkpoint). First frame is the official 832x480 driving clip.
-     "example": {"prompt": "You are an autonomous vehicle planning system.",
-                 "params": {"size": "832x480", "fps": 10, "num_inference_steps": 50, "guidance_scale": 1.0,
-                            "flow_shift": 5.0, "domain_name": "av", "raw_action_dim": 9},
-                 "reference": "policy_av_first_frame.png", "action": "policy"}},
+    {"id": "policy", "label": "Policy", "surface": "generate", "group": "Robotics", "action": True,
+     "kind": "video", "reference": "image", "blurb": "Robot policy: from a single first frame + a language "
+     "instruction the model predicts its own action trajectory and rolls out the manipulation.",
+     "io": "First frame + instruction → predicted actions + manipulation video",
+     "purpose": "Turn perception into action — give the robot a goal, not a script, and the same omnimodal "
+                "backbone follows the instruction: from one camera frame it predicts a 16-step manipulation "
+                "trajectory and rolls out the resulting arm motion.",
+     "flow": {"inputs": ["first frame", "instruction"], "output": "predicted manipulation + actions"},
+     "notes": [["model decides", "the 16-step action trajectory"],
+               ["rolls out", "the predicted manipulation (single shot)"]],
+     # Official robot policy example (cosmos-framework inputs/omni/action_policy_robot.json): bridge_orig_lerobot
+     # domain, ego_view, 10-D action (pos+rot6d+gripper), image_size 480 (640x480), 5 fps, 16-step chunk.
+     # Runs on the base generator. First frame is the official bridge clip's opening frame.
+     "example": {"prompt": "Put the pot to the left of the purple item.",
+                 "params": {"size": "640x480", "fps": 5, "num_inference_steps": 50, "guidance_scale": 1.0,
+                            "flow_shift": 5.0, "domain_name": "bridge_orig_lerobot", "raw_action_dim": 10,
+                            "action_chunk_size": 16},
+                 "reference": "policy_robot_first_frame.png", "action": "policy"}},
     # ---- REASON ----
     {"id": "caption", "label": "Captioning", "surface": "reason", "group": "Reason", "primary": True,
      "kind": "text", "reference": "image", "blurb": "Detailed description of an image or video.",

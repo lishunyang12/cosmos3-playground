@@ -198,12 +198,14 @@ function ActionTrajectory({ action, title }) {
   }, [rows, cols]);
 
   const SW = 150, SH = 38, sp = 3;
-  // Cosmos canonical 9-D action = translation(3) + rot6d(6) (action_spec.py: Pos()+Rot("rot6d")).
-  const isPose = cols === 9;
-  const POSE_LBL = ["x", "y", "z", "R₀", "R₁", "R₂", "R₃", "R₄", "R₅"];
+  // Cosmos canonical action = translation(3) + rot6d(6) [+ gripper(1)] (action_spec.py: Pos()+Rot("rot6d")[+Gripper()]).
+  const isPose = cols === 9 || cols === 10;
+  const POSE_LBL = cols === 10
+    ? ["x", "y", "z", "R₀", "R₁", "R₂", "R₃", "R₄", "R₅", "grip"]
+    : ["x", "y", "z", "R₀", "R₁", "R₂", "R₃", "R₄", "R₅"];
   const label = (j) => (isPose ? POSE_LBL[j] : `d${j}`);
-  // Translation = warm hues, rotation = cool hues, so the two blocks read apart at a glance.
-  const hue = (j) => (isPose ? (j < 3 ? 20 + j * 14 : 165 + (j - 3) * 28) : Math.round((j / Math.max(1, cols)) * 310));
+  // Translation = warm, rotation = cool, gripper = magenta — so the blocks read apart at a glance.
+  const hue = (j) => (!isPose ? Math.round((j / Math.max(1, cols)) * 310) : j < 3 ? 20 + j * 14 : j < 9 ? 165 + (j - 3) * 22 : 305);
   const norm = (v, j) => (Number(v) - stats.mn[j]) / Math.max(1e-9, stats.mx[j] - stats.mn[j]);
   const sparkPts = (j) => rows.map((r, i) => {
     const x = sp + (i / Math.max(1, n - 1)) * (SW - 2 * sp);
@@ -268,6 +270,7 @@ function ActionTrajectory({ action, title }) {
         <div className="traj-legend">
           <b style={{ color: "hsl(27 70% 60%)" }}>x y z</b> = relative translation (per frame) ·{" "}
           <b style={{ color: "hsl(200 70% 62%)" }}>R₀…R₅</b> = rotation as rot6d (first two columns of the 3×3 matrix; identity = 1,0,0, 0,1,0)
+          {cols === 10 && <> · <b style={{ color: "hsl(305 70% 64%)" }}>grip</b> = gripper</>}
         </div>
       )}
       <div className="traj-foot"><a onClick={download}><IconDownload /> full trajectory (JSON)</a></div>
@@ -1001,9 +1004,11 @@ export default function App() {
                 {refUrl && <EgoMotionOverlay action={result.action} videoUrl={refUrl} fps={Number(params.fps) || 10} />}
                 <ActionTrajectory action={result.action} />
               </>)}
-              {result?.action && !actionOut && (
+              {result?.action && !actionOut && (<>
                 <div className="action-box"><b>action</b> · mode={result.action.action_mode} · shape={JSON.stringify(result.action.shape)} · dtype={result.action.dtype} · domain={result.action.domain_id}</div>
-              )}
+                <ActionTrajectory action={result.action}
+                  title={result.action.action_mode === "policy" ? "Predicted action trajectory (model output)" : undefined} />
+              </>)}
               {result?.profiling?.inference_time_s != null && (
                 <div className="profiling">
                   {result.profiling.inference_time_s?.toFixed?.(1)}s
