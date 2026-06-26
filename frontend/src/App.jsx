@@ -35,6 +35,71 @@ function rot6dRPY(r) {
   return { pitch: (R[2][1] - R[1][2]) / 2, yaw: (R[0][2] - R[2][0]) / 2, roll: (R[1][0] - R[0][1]) / 2 };
 }
 
+// Overlay a generic action plan on the output video: a per-frame bar for every action
+// dimension, redrawn in sync with playback so you see the action driving each frame.
+function ActionPlanOverlay({ action, videoUrl, fps }) {
+  const shape = action.shape || [];
+  const d = action.data;
+  const cols = shape[1] || (Array.isArray(d?.[0]) ? d[0].length : 1);
+  let rows = [];
+  if (Array.isArray(d) && Array.isArray(d[0])) rows = d;
+  else if (Array.isArray(d)) for (let i = 0; i < d.length; i += cols) rows.push(d.slice(i, i + cols));
+  const n = rows.length;
+  const vref = useRef(null), cref = useRef(null);
+  const [step, setStep] = useState(0);
+  const rmax = useMemo(() => {
+    const m = Array(cols).fill(1e-6);
+    for (const r of rows) for (let j = 0; j < cols; j++) m[j] = Math.max(m[j], Math.abs(Number(r[j])));
+    return m;
+  }, [rows, cols]);
+  useEffect(() => {
+    let raf;
+    const draw = () => {
+      const v = vref.current, c = cref.current;
+      if (v && c && c.clientWidth) {
+        const W = (c.width = c.clientWidth), H = (c.height = c.clientHeight);
+        const s = Math.min(n - 1, Math.max(0, Math.round((v.currentTime || 0) * fps)));
+        const r = rows[s] || [];
+        const ctx = c.getContext("2d");
+        ctx.clearRect(0, 0, W, H);
+        const ph = Math.max(60, H * 0.26), py = H - ph, fs = Math.max(11, Math.round(H * 0.028));
+        ctx.fillStyle = "rgba(0,0,0,0.42)"; ctx.fillRect(0, py, W, ph);
+        const cy = py + ph * 0.55, half = ph * 0.34;
+        ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(6, cy); ctx.lineTo(W - 6, cy); ctx.stroke();   // zero line
+        const slot = (W - 12) / cols;
+        for (let j = 0; j < cols; j++) {
+          const x = 6 + j * slot + slot / 2, nv = Number(r[j]) / rmax[j];
+          const h = Math.max(-1, Math.min(1, nv)) * half;
+          ctx.fillStyle = `hsl(${Math.round((j / cols) * 300)} 75% 58%)`;
+          ctx.fillRect(x - Math.max(1, slot * 0.34), cy - Math.max(0, h), Math.max(2, slot * 0.68), Math.abs(h));
+        }
+        ctx.textBaseline = "top"; ctx.font = `${fs}px ui-sans-serif, system-ui, sans-serif`;
+        const mag = Math.hypot(...r.map(Number)).toFixed(2);
+        ctx.fillStyle = "rgba(255,255,255,0.92)";
+        ctx.fillText(`action plan · step ${s + 1}/${n} · ${cols}-D · ‖a‖ ${mag}`, 8, py + 4);
+        if (s !== step) setStep(s);
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [rows, n, fps, rmax, step]);
+  return (
+    <div className="trajectory">
+      <div className="traj-head">
+        <span className="traj-title">Predicted video · action plan overlay</span>
+        <span className="traj-meta">step {step + 1}/{n}</span>
+      </div>
+      <div className="ego-wrap">
+        <video ref={vref} className="ego-video" src={videoUrl} controls autoPlay loop muted playsInline />
+        <canvas ref={cref} className="ego-ov" />
+      </div>
+      <div className="traj-cap">each bar = one action dimension at the current step (signed, around zero), in sync with the rollout</div>
+    </div>
+  );
+}
+
 function EgoMotionOverlay({ action, videoUrl, fps }) {
   const shape = action.shape || [];
   const d = action.data;
@@ -998,7 +1063,10 @@ export default function App() {
             const actionOut = result?.action?.action_mode === "inverse_dynamics";
             return (<>
               {result?.kind === "image" && result.src && <img className="media" src={result.src} alt="result" />}
-              {result?.kind === "video" && result.src && !actionOut && <video className="media" src={result.src} controls autoPlay loop />}
+              {result?.kind === "video" && result.src && !actionOut && !result?.action && <video className="media" src={result.src} controls autoPlay loop />}
+              {result?.kind === "video" && result.src && !actionOut && result?.action && (
+                <ActionPlanOverlay action={result.action} videoUrl={result.src} fps={Number(params.fps) || 10} />
+              )}
               {result?.kind === "text" && <div className="answer"><Markdown text={result.text} /></div>}
               {actionOut && result?.action && (<>
                 {refUrl && <EgoMotionOverlay action={result.action} videoUrl={refUrl} fps={Number(params.fps) || 10} />}
