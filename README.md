@@ -7,11 +7,10 @@ decoupled UI you point at it.
 
 <img width="1875" height="870" alt="image" src="https://github.com/user-attachments/assets/6b40f8e3-8122-4c29-90db-d26a122ad94d" />
 
+<img width="1861" height="766" alt="image" src="https://github.com/user-attachments/assets/651c7213-66e1-4c38-94b2-7d5e2ec75316" />
 
 > Imagine → animate → edit → hear a world, from one model. Cosmos3 picks the task per
 > request; the playground just gives each task a nice front door.
-
-![modes](docs/modes.png)
 
 ## What it gives you
 
