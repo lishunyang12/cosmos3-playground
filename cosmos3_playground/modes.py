@@ -208,7 +208,9 @@ MODES: list[dict[str, Any]] = [
      # "pick up the red apple…", "move the blue mug…", "stack the blocks…". bridge_orig_lerobot embodiment,
      # 10-D action (pos+rot6d+gripper), 5 fps, single 32-step chunk. Runs on the base generator.
      "example": {"prompt": "Pick up the red apple and place it on the plate.",
-                 "params": {"size": "1280x720", "fps": 5, "num_inference_steps": 50, "guidance_scale": 1.0,
+                 # guidance 3.0 (CFG) noticeably sharpens the HD rollout — the bridge embodiment is trained
+                 # ~480p, so at 720p CFG fills in detail (measured ~+20% sharpness, more motion, still coherent).
+                 "params": {"size": "1280x720", "fps": 5, "num_inference_steps": 50, "guidance_scale": 3.0,
                             "flow_shift": 5.0, "domain_name": "bridge_orig_lerobot", "raw_action_dim": 10,
                             "action_chunk_size": 32},
                  "reference": "policy_robot_scene.png", "action": "policy"}},
