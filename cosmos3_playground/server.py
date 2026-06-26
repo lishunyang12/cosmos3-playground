@@ -250,8 +250,8 @@ def create_app(
                             reference: UploadFile | None = None) -> dict[str, Any]:
         """Start an autoregressive forward-dynamics rollout: generate one action chunk at a
         time, conditioning each on the previous chunk's last frame, then stitch the clips."""
-        if mode not in ("fwd_dynamics", "policy"):
-            raise HTTPException(status_code=400, detail="rollout is only for forward dynamics or policy")
+        if mode != "fwd_dynamics":
+            raise HTTPException(status_code=400, detail="rollout is only for forward dynamics")
         if reference is None:
             raise HTTPException(status_code=400, detail="rollout needs a first-frame image")
         try:

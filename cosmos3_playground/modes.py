@@ -202,18 +202,16 @@ MODES: list[dict[str, Any]] = [
                 "backbone follows the instruction: from one camera frame it predicts a 16-step manipulation "
                 "trajectory and rolls out the resulting arm motion.",
      "flow": {"inputs": ["first frame", "instruction"], "output": "predicted manipulation video"},
-     "notes": [["model decides", "its own 16-step action chunks"],
-               ["rolls out", "autoregressively — each chunk continues the last (longer = fuller task)"]],
-     "extra": [{"key": "rollout_chunks", "label": "Rollout (×16-step chunks, autoregressive)", "type": "int",
-                "widget": "slider", "min": 1, "max": 8, "step": 1, "default": 4, "unit": "chunks"}],
-     # Official robot policy example (cosmos-framework inputs/omni/action_policy_robot.json): bridge_orig_lerobot
-     # domain, ego_view, 10-D action (pos+rot6d+gripper), image_size 480 (640x480), 5 fps, 16-step chunk.
-     # Runs on the base generator. First frame is the official bridge clip's opening frame.
-     "example": {"prompt": "Put the pot to the left of the purple item.",
-                 "params": {"size": "640x480", "fps": 5, "num_inference_steps": 50, "guidance_scale": 1.0,
+     "notes": [["model decides", "the action trajectory from the instruction"],
+               ["rolls out", "one coherent manipulation (single shot) — try different instructions"]],
+     # HD, cluttered manipulation scene (apple, banana, mug, blocks, can, plate) so many instructions work:
+     # "pick up the red apple…", "move the blue mug…", "stack the blocks…". bridge_orig_lerobot embodiment,
+     # 10-D action (pos+rot6d+gripper), 5 fps, single 32-step chunk. Runs on the base generator.
+     "example": {"prompt": "Pick up the red apple and place it on the plate.",
+                 "params": {"size": "1280x720", "fps": 5, "num_inference_steps": 50, "guidance_scale": 1.0,
                             "flow_shift": 5.0, "domain_name": "bridge_orig_lerobot", "raw_action_dim": 10,
-                            "action_chunk_size": 16},
-                 "reference": "policy_robot_first_frame.png", "action": "policy"}},
+                            "action_chunk_size": 32},
+                 "reference": "policy_robot_scene.png", "action": "policy"}},
     # ---- REASON ----
     {"id": "caption", "label": "Captioning", "surface": "reason", "group": "Reason", "primary": True,
      "kind": "text", "reference": "image", "blurb": "Detailed description of an image or video.",
