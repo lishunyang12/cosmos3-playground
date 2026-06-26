@@ -87,3 +87,14 @@ export async function exampleAction(mode) {
   if (!r.ok) return null;
   return r.json();
 }
+
+// Pre-baked example output (gallery default): the saved result for a mode, shown until
+// the user regenerates. Returns null when nothing has been baked for this mode.
+export async function exampleResult(mode) {
+  const r = await fetch(`/api/example/${mode}/result`);
+  if (!r.ok) return null;
+  return r.json();
+}
+export function exampleResultContentUrl(mode) {
+  return `/api/example/${mode}/result/content`;
+}

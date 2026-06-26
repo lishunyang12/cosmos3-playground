@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getConfig, generate, getJob, jobContentUrl, requestPreview, exampleAction, validate, rolloutStart, rolloutStatus, rolloutContentUrl } from "./api.js";
+import { getConfig, generate, getJob, jobContentUrl, requestPreview, exampleAction, exampleResult, exampleResultContentUrl, validate, rolloutStart, rolloutStatus, rolloutContentUrl } from "./api.js";
 import {
   IconAtom, IconSparkles, IconEye, IconUpload, IconAlert,
   IconChevron, IconReset, IconDownload,
@@ -844,6 +844,19 @@ export default function App() {
         .then((b) => b && setRefFile(new File([b], ex.reference, { type: b.type })))
         .catch(() => {});
     }
+    // Show the pre-baked output by default (gallery mode); Generate replaces it live.
+    let live = true;
+    exampleResult(mode.id).then((meta) => {
+      if (!live || !meta) return;
+      const hasMedia = !!meta.media;
+      const src = hasMedia ? exampleResultContentUrl(mode.id) : undefined;
+      if (meta.kind === "text") setResult({ kind: "text", text: meta.text, cached: true });
+      else if (meta.kind === "image") setResult({ kind: "image", src, cached: true });
+      else if (meta.kind === "video")
+        setResult({ kind: "video", src, action: meta.action, profiling: meta.profiling,
+                    jobStatus: "completed", cached: true });
+    }).catch(() => {});
+    return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modeId, config, resetKey]);
 
@@ -1061,10 +1074,16 @@ export default function App() {
             // reconstruction clip, but showing it reads as "it just echoed my video". Surface the
             // trajectory instead and skip the video for action-output modes.
             const actionOut = result?.action?.action_mode === "inverse_dynamics";
+            // Policy and forward dynamics show the video clean — no real-time action-plan bars drawn
+            // over the frame (the trajectory still appears as a chart below).
+            const overlayPlan = !actionOut && result?.action && mode?.id !== "policy" && mode?.id !== "fwd_dynamics";
             return (<>
+              {result?.cached && status !== "running" && (
+                <div className="cached-badge">cached example · press {isReason ? "Analyze" : "Generate"} to run live</div>
+              )}
               {result?.kind === "image" && result.src && <img className="media" src={result.src} alt="result" />}
-              {result?.kind === "video" && result.src && !actionOut && !result?.action && <video className="media" src={result.src} controls autoPlay loop />}
-              {result?.kind === "video" && result.src && !actionOut && result?.action && (
+              {result?.kind === "video" && result.src && !actionOut && !overlayPlan && <video className="media" src={result.src} controls autoPlay loop />}
+              {result?.kind === "video" && result.src && overlayPlan && (
                 <ActionPlanOverlay action={result.action} videoUrl={result.src} fps={Number(params.fps) || 10} />
               )}
               {result?.kind === "text" && <div className="answer"><Markdown text={result.text} /></div>}

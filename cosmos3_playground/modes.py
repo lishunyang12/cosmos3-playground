@@ -28,14 +28,13 @@ EXAMPLES_DIR = Path(__file__).parent / "examples"
 # audio-visual: steps=50, guidance=6, shift=10, full-range CFG.
 _VIDEO_DEFAULTS = {
     "size": "1280x720", "num_frames": 93, "fps": 24,
-    "num_inference_steps": 50, "guidance_scale": 6.0, "flow_shift": 10.0, "seed": 0,
+    "num_inference_steps": 50, "guidance_scale": 6.0, "flow_shift": 10.0,
 }
 # text2image paper defaults: steps 50, guidance 4.0 (shift 3.0 is the pipeline T2I default), 1:1 960x960.
-# Fixed seed so the same prompt is reproducible (the backend otherwise picks a random seed each call).
-_IMAGE_DEFAULTS = {"size": "960x960", "num_inference_steps": 50, "guidance_scale": 4.0, "seed": 0}
+_IMAGE_DEFAULTS = {"size": "960x960", "num_inference_steps": 50, "guidance_scale": 4.0}
 # Forward/inverse dynamics (Table 21): steps=50, guidance=1, shift=5, full-range CFG,
 # null negative prompt. Action envelope: 10-30 FPS, 16-400 frame horizon (§6.3.1).
-_ACTION_DEFAULTS = {"size": "832x480", "fps": 10, "num_inference_steps": 50, "guidance_scale": 1.0, "flow_shift": 5.0, "seed": 0}
+_ACTION_DEFAULTS = {"size": "832x480", "fps": 10, "num_inference_steps": 50, "guidance_scale": 1.0, "flow_shift": 5.0}
 
 # Action-mode prompt formatting — mirror cosmos-framework's ActionPromptJsonFormatter +
 # action.py so the checkpoints see their trained input distribution: the IMAGE system prompt
@@ -58,23 +57,17 @@ _DOMAIN_VIEW_DESC = {
                       "concatenated third-person perspective views of the scene from opposite sides, with the robot visible."),
 }
 
-# Default negative prompt for video generation, verbatim from the report's Appendix B.3
-# (the natural-language "DEFAULT NEGATIVE PROMPT"). Table 21 uses the null string for
-# Text2Image and for all action/dynamics modes, so only the video examples carry this.
-_NEG_VIDEO = (
-    "The video captures a series of frames showing macroblocking artifacts, chromatic "
-    "aberration, high-frequency noise, and rolling shutter distortion. It includes static "
-    "with no motion, motion blur, over-saturation, shaky footage, low resolution, grainy "
-    "texture, pixelated images, poorly lit areas, underexposed and overexposed scenes, poor "
-    "color balance, washed out colors, choppy sequences, jerky movements, low frame rate, "
-    "bit-depth compression artifacts, color banding, unnatural transitions, outdated special "
-    "effects, fake elements, unconvincing visuals, poorly edited content, jump cuts, hard cut, "
-    "visual noise, and flickering. It features moire patterns, edge halos, and temporal "
-    "aliasing. Furthermore, the content defies common sense, generating illogical scenarios, "
-    "nonsensical entities, absurd character behaviors, and conceptual paradoxes that violate "
-    "basic human reasoning and everyday reality. The video looks like a surreal or glitchy "
-    "hallucination. Overall, the video is of poor quality."
-)
+# Cosmos3 Generator Negative Prompt (report Appendix B.6) — the canonical default the
+# framework loads via `negative_prompt_file: neg_prompts.json` for video generation
+# (text2video / image2video / video2video / audio_image2video), per their sample_args.json.
+# It is a *structured* caption (the generator is trained on structured captions), not the
+# natural-language string used by earlier models. Table 21 / sample_args use the null string
+# for Text2Image and for all action/dynamics modes, so only video generation carries this.
+# Stored as a compact JSON string so it can be sent straight through as negative_prompt.
+_NEG_VIDEO = json.dumps(json.loads((EXAMPLES_DIR / "neg_prompts.json").read_text()),
+                        ensure_ascii=False, separators=(",", ":"))
+# Video-generation modes that take the default structured negative prompt above.
+_VIDEO_GEN_MODES = {"t2v", "i2v", "v2v", "transfer"}
 
 # Forward-dynamics example metadata — drives the Rollout control and the derived frame count.
 # Duration is bound to the action trajectory (1 frame per action step), so the user picks how
@@ -99,7 +92,7 @@ def _ex_prompt(name: str) -> str:
 #   text2video : steps 35, guidance 6.0, shift 10.0, 16:9 (1280x720), fps 24, 189 frames
 #   image2video: steps 35, guidance 6.0, shift 10.0, 16:9 (1280x720), fps 24, 189 frames
 _T2V_PAPER = {"size": "1280x720", "fps": 24, "num_inference_steps": 35, "guidance_scale": 6.0,
-              "flow_shift": 10.0, "num_frames": 189, "seed": 0}
+              "flow_shift": 10.0, "num_frames": 189}
 
 # ----------------------------------------------------------------------------- modes
 MODES: list[dict[str, Any]] = [
@@ -107,16 +100,15 @@ MODES: list[dict[str, Any]] = [
     {"id": "t2i", "label": "Text → Image", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "image", "reference": "none", "blurb": "Generate a still image from a prompt.",
      "io": "Prompt → image", "key_knobs": ["size", "guidance_scale"],
-     # Official Cosmos3 example (paper inputs/omni/t2i.json). Short prompt; the Reasoner upsamples it.
-     "example": {"prompt": "A medium shot of a modern robotics research lab: a metallic robotic arm on a "
-                 "white workbench above a row of small colored blocks, a laptop beside it, a wall monitor "
-                 "showing a software UI, bright overhead lighting.",
+     "example": {"prompt": "A humanoid robot with a sleek white and black design stands beside a red popcorn "
+                 "dispenser filled with golden popcorn. The robot uses its right arm to pick up a green paper "
+                 "cup from the table in front of it, preparing to fill it.",
                  "params": _IMAGE_DEFAULTS, "reference": None}},
     {"id": "t2v", "label": "Text → Video", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "video", "reference": "none", "blurb": "Imagine a video world from a prompt.",
      "io": "Prompt → video (with optional sound)", "key_knobs": ["size", "num_frames", "generate_sound"],
-     # Official Cosmos3 example (paper inputs/omni/t2v.json). Short prompt; the Reasoner upsamples it.
-     # No negative_prompt → backend applies the paper B.6 structured negative prompt by default.
+     # Official Cosmos3 example (paper inputs/omni/t2v.json). build_request injects the paper B.6
+     # structured negative prompt (_NEG_VIDEO) for video generation when none is supplied.
      "example": {"prompt": "A large industrial crucible pours a continuous glowing stream of molten metal "
                  "into a mold below, sparks scattering from the impact, inside a dark steel-mill foundry; "
                  "static wide shot.",
@@ -227,11 +219,11 @@ MODES: list[dict[str, Any]] = [
      # "pick up the red apple…", "move the blue mug…", "stack the blocks…". bridge_orig_lerobot embodiment,
      # 10-D action (pos+rot6d+gripper), 5 fps, single 32-step chunk. Runs on the base generator.
      "example": {"prompt": "Pick up the red apple and place it on the plate.",
-                 # guidance/flow_shift 6 sharpens the HD rollout; fps 15 = smooth playback. Frames is a
+                 # guidance 7 / flow_shift 6 sharpens the HD rollout; fps 15 = smooth playback. Frames is a
                  # user slider (default 90 = 6s @ 15fps); the action chunk is derived as num_frames - 1.
-                 "params": {"size": "1280x720", "fps": 15, "num_inference_steps": 50, "guidance_scale": 6.0,
+                 "params": {"size": "1280x720", "fps": 15, "num_inference_steps": 50, "guidance_scale": 7.0,
                             "flow_shift": 6.0, "domain_name": "bridge_orig_lerobot", "raw_action_dim": 10,
-                            "num_frames": 90, "seed": 0},
+                            "num_frames": 90},
                  "reference": "policy_robot_scene.png", "action": "policy"}},
     # ---- REASON ----
     {"id": "caption", "label": "Captioning", "surface": "reason", "group": "Reason", "primary": True,
@@ -357,6 +349,10 @@ def build_request(mode_id: str, params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("prompt is required")
     if params.get("negative_prompt"):
         fields["negative_prompt"] = params["negative_prompt"]
+    elif mode_id in _VIDEO_GEN_MODES:
+        # paper-faithful default: video generation conditions on the B.6 structured negative
+        # prompt (the framework's neg_prompts.json). T2I + action/dynamics keep the null string.
+        fields["negative_prompt"] = _NEG_VIDEO
     if params.get("size"):
         fields["size"] = params["size"]
     for key, cast in (("num_inference_steps", int), ("guidance_scale", float), ("seed", int)):

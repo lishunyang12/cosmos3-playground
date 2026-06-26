@@ -26,10 +26,11 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from cosmos3_playground import __version__, modes, upsampler
+from cosmos3_playground import __version__, modes
 from cosmos3_playground.cosmos_client import CosmosClient, ReasonerClient
 
 STATIC_DIR = Path(__file__).parent / "static"
+PREBAKE_DIR = Path(__file__).parent / "prebaked"
 
 
 def _gen_topology() -> dict[str, Any]:
@@ -152,30 +153,6 @@ def create_app(
                 p["size"] = min(buckets.items(), key=lambda kv: abs(kv[0] - w / h))[1]
             except Exception:  # noqa: BLE001 — fall back to the requested values on decode failure
                 pass
-
-        # ---- Prompt upsampling (Cosmos3 two-stage): short NL prompt -> structured caption ----
-        # The generator is trained on the dense JSON caption; the Reasoner expands the user's
-        # short prompt into it. Skip if no reasoner, or if the prompt already looks upsampled.
-        if mode in ("t2i", "t2v", "i2v") and reasoner.configured:
-            raw = (p.get("prompt") or "").strip()
-            if raw and not upsampler.is_upsampled_prompt(raw):
-                umode = {"t2i": "text2image", "t2v": "text2video", "i2v": "image2video"}[mode]
-                size = p.get("size") or "1280x720"
-                fps = int(p.get("fps") or 24)
-                nf = int(p.get("num_frames") or 189)
-                img_url = None
-                if mode == "i2v" and reference is not None:
-                    if ref_bytes is None:
-                        ref_bytes = await reference.read()
-                    import mimetypes
-                    mime = reference.content_type or mimetypes.guess_type(reference.filename or "")[0] or "image/jpeg"
-                    img_url = f"data:{mime};base64,{base64.b64encode(ref_bytes).decode()}"
-                try:
-                    up = await reasoner.chat(
-                        upsampler.build_payload(umode, raw, size, fps, nf, app.state.reasoner_model, img_url))
-                    p["prompt"] = upsampler.parse_upsampled(up, umode, size, fps, nf)
-                except (httpx.HTTPError, ValueError, json.JSONDecodeError, KeyError):
-                    pass  # fall back to the raw natural-language prompt if upsampling fails
 
         try:
             req = modes.build_request(mode, p)
@@ -391,6 +368,34 @@ def create_app(
         if path is None:
             raise HTTPException(status_code=404, detail="no example reference for this mode")
         # no-store so swapping an example asset takes effect immediately (path is constant).
+        return FileResponse(str(path), headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/example/{mode_id}/result")
+    async def example_result(mode_id: str) -> dict[str, Any]:
+        """Pre-baked output for this mode, shown by default until the user regenerates.
+        Produced offline by `python -m cosmos3_playground.prebake`."""
+        meta = PREBAKE_DIR / f"{mode_id}.json"
+        if not meta.is_file():
+            raise HTTPException(status_code=404, detail="no pre-baked result for this mode")
+        try:
+            return json.loads(meta.read_text())
+        except (OSError, json.JSONDecodeError) as err:
+            raise HTTPException(status_code=500, detail=f"bad pre-baked meta: {err}") from err
+
+    @app.get("/api/example/{mode_id}/result/content")
+    async def example_result_content(mode_id: str) -> FileResponse:
+        meta_path = PREBAKE_DIR / f"{mode_id}.json"
+        if not meta_path.is_file():
+            raise HTTPException(status_code=404, detail="no pre-baked result for this mode")
+        try:
+            media = json.loads(meta_path.read_text()).get("media")
+        except (OSError, json.JSONDecodeError):
+            media = None
+        if not media:
+            raise HTTPException(status_code=404, detail="this pre-baked result has no media")
+        path = PREBAKE_DIR / media
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="pre-baked media missing")
         return FileResponse(str(path), headers={"Cache-Control": "no-store"})
 
     if STATIC_DIR.is_dir():

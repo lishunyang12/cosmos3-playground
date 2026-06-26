@@ -1,0 +1,10 @@
+{
+  "kind": "video",
+  "media": "transfer.mp4",
+  "profiling": {
+    "inference_time_s": 194.48210209794343,
+    "peak_memory_mb": 48186.0
+  },
+  "mode": "transfer",
+  "baked_seconds": 195.8
+}
