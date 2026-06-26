@@ -190,10 +190,10 @@ MODES: list[dict[str, Any]] = [
      # The model's real output here is the action tensor, not a clip — tell the UI to surface the
      # trajectory (numbers + plot) instead of the echoed reconstruction video.
      "primary_output": "action",
-     "example": {"prompt": "Recover the per-frame ego-motion behind this race-car onboard clip — the camera's "
-                 "translation and rotation through the scene, frame by frame. The output is a 32×9 action "
+     "example": {"prompt": "Recover the per-frame ego-motion behind this driving clip — the camera's "
+                 "translation and rotation through the scene, frame by frame. The output is a 60×9 action "
                  "trajectory, not a video.",
-                 "params": {**_ACTION_DEFAULTS, "num_frames": 33, "action_chunk_size": 32}, "reference": "race_pov.mp4"}},
+                 "params": {**_ACTION_DEFAULTS, "num_frames": 61, "action_chunk_size": 60}, "reference": "inv_av_official.mp4"}},
     {"id": "policy", "label": "Policy", "surface": "generate", "group": "Autonomous Driving", "action": True,
      "kind": "video", "reference": "image", "blurb": "Planning policy: from a single first frame + a role "
      "instruction the model predicts its own action trajectory and rolls out the future.",

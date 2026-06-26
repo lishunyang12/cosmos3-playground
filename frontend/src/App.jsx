@@ -141,7 +141,7 @@ function EgoMotionOverlay({ action, videoUrl, fps }) {
   return (
     <div className="trajectory">
       <div className="traj-head">
-        <span className="traj-title">Recovered ego-motion · race-car HUD</span>
+        <span className="traj-title">Recovered ego-motion · driving HUD</span>
         <span className="traj-meta">frame {fcur}/{n - 1}</span>
       </div>
       <div className="ego-wrap">
