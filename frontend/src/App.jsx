@@ -69,49 +69,67 @@ function EgoMotionOverlay({ action, videoUrl, fps }) {
         const m = comps[fr] || { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0 };
         const ctx = c.getContext("2d");
         ctx.clearRect(0, 0, W, H);
-        const ox = W / 2, oy = H * 0.9;
-        const spd = Math.abs(m.z) / rmax.z;                 // forward speed, 0..1
-        const tilt = Math.max(-1, Math.min(1, m.yaw / rmax.yaw)) * 0.9;  // yaw -> steering tilt (rad)
-        const L = (0.12 + 0.55 * spd) * H;
-        const tx = ox + Math.sin(tilt) * L, ty = oy - Math.cos(tilt) * L;
-        // roll'd horizon line through the ego point
-        const rollA = Math.max(-1, Math.min(1, m.roll / rmax.roll)) * 0.5;
-        ctx.strokeStyle = "rgba(255,255,255,0.28)"; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(ox - Math.cos(rollA) * W * 0.16, oy + Math.sin(rollA) * W * 0.16);
-        ctx.lineTo(ox + Math.cos(rollA) * W * 0.16, oy - Math.sin(rollA) * W * 0.16); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox, oy - 0.12 * H); ctx.stroke();  // forward ref
-        // motion arrow: tilt = steering (yaw), length = forward speed, color = speed
-        const hue = 140 - 140 * Math.min(1, spd);
-        ctx.strokeStyle = `hsl(${hue} 90% 55%)`; ctx.fillStyle = ctx.strokeStyle;
-        ctx.lineWidth = Math.max(3, H * 0.014); ctx.lineCap = "round";
-        ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(tx, ty); ctx.stroke();
-        const ah = Math.max(9, H * 0.05), a = Math.atan2(ty - oy, tx - ox);
-        ctx.beginPath(); ctx.moveTo(tx, ty);
-        ctx.lineTo(tx - ah * Math.cos(a - 0.42), ty - ah * Math.sin(a - 0.42));
-        ctx.lineTo(tx - ah * Math.cos(a + 0.42), ty - ah * Math.sin(a + 0.42));
-        ctx.closePath(); ctx.fill();
+        const cl = (v) => Math.max(-1, Math.min(1, v));
+        const spd = Math.abs(m.z) / rmax.z;            // forward speed 0..1
+        const hue = 140 - 140 * spd;                   // green(slow) -> red(fast)
         const fs = Math.max(11, Math.round(H * 0.03));
-        ctx.font = `${fs}px ui-sans-serif, system-ui, sans-serif`; ctx.textBaseline = "top";
-        ctx.fillStyle = "rgba(255,255,255,0.55)"; ctx.fillText("forward", ox + 6, oy - 0.12 * H);
-        // legend: explain arrow + color
-        const legend = "arrow: tilt = steering (yaw) · length = forward speed · color = speed (green slow → red fast)";
+        ctx.textBaseline = "top"; ctx.lineCap = "round";
+
+        // artificial horizon — pitch (vertical shift) + roll (tilt)
+        {
+          const rollA = cl(m.roll / rmax.roll) * 0.5, pY = H * 0.4 + cl(m.pitch / rmax.pitch) * H * 0.12;
+          ctx.save(); ctx.translate(W / 2, pY); ctx.rotate(rollA);
+          ctx.strokeStyle = "rgba(120,200,255,0.5)"; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.moveTo(-W * 0.22, 0); ctx.lineTo(-W * 0.05, 0);
+          ctx.moveTo(W * 0.05, 0); ctx.lineTo(W * 0.22, 0); ctx.moveTo(0, -H * 0.02); ctx.lineTo(0, H * 0.02); ctx.stroke();
+          ctx.restore();
+        }
+        // speedometer (bottom-left) — forward speed; the dial color answers "what does speed look like"
+        {
+          const sr = H * 0.16, scx = sr + W * 0.02 + 8, scy = H - sr - H * 0.06;
+          const a0 = Math.PI * 0.75, a1 = Math.PI * 2.25, av = a0 + (a1 - a0) * spd;
+          ctx.lineWidth = Math.max(5, H * 0.024); ctx.strokeStyle = "rgba(255,255,255,0.16)";
+          ctx.beginPath(); ctx.arc(scx, scy, sr, a0, a1); ctx.stroke();
+          ctx.strokeStyle = `hsl(${hue} 90% 55%)`; ctx.beginPath(); ctx.arc(scx, scy, sr, a0, av); ctx.stroke();
+          ctx.strokeStyle = "#fff"; ctx.lineWidth = Math.max(2, H * 0.009);
+          ctx.beginPath(); ctx.moveTo(scx, scy); ctx.lineTo(scx + Math.cos(av) * sr * 0.85, scy + Math.sin(av) * sr * 0.85); ctx.stroke();
+          ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(scx, scy, H * 0.012, 0, 7); ctx.fill();
+          ctx.textAlign = "center";
+          ctx.font = `bold ${Math.round(fs * 1.25)}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.fillStyle = `hsl(${hue} 90% 66%)`; ctx.fillText(m.z.toFixed(3), scx, scy + sr * 0.22);
+          ctx.font = `${Math.round(fs * 0.82)}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.fillStyle = "rgba(255,255,255,0.72)"; ctx.fillText("SPEED (fwd)", scx, scy + sr * 0.5);
+          ctx.textAlign = "left";
+        }
+        // steering wheel (bottom-right) — yaw
+        {
+          const wr = H * 0.13, wcx = W - wr - W * 0.03, wcy = H - wr - H * 0.07;
+          const steer = cl(m.yaw / rmax.yaw) * Math.PI * 0.6;
+          ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth = Math.max(4, H * 0.018);
+          ctx.beginPath(); ctx.arc(wcx, wcy, wr, 0, 7); ctx.stroke();
+          ctx.save(); ctx.translate(wcx, wcy); ctx.rotate(steer); ctx.lineWidth = Math.max(3, H * 0.012);
+          ctx.beginPath(); ctx.moveTo(-wr * 0.85, 0); ctx.lineTo(wr * 0.85, 0); ctx.moveTo(0, 0); ctx.lineTo(0, wr * 0.85); ctx.stroke();
+          ctx.fillStyle = "#ff5555"; ctx.beginPath(); ctx.arc(0, -wr, H * 0.016, 0, 7); ctx.fill(); ctx.restore();
+          ctx.textAlign = "center"; ctx.font = `${Math.round(fs * 0.82)}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.fillStyle = "rgba(255,255,255,0.72)"; ctx.fillText("STEER (yaw)", wcx, wcy + wr + 5); ctx.textAlign = "left";
+        }
+        // G-meter (bottom-center) — lateral x / vertical y
+        {
+          const gr = H * 0.1, gcx = W / 2, gcy = H - gr - H * 0.07;
+          ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.arc(gcx, gcy, gr, 0, 7); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(gcx - gr, gcy); ctx.lineTo(gcx + gr, gcy);
+          ctx.moveTo(gcx, gcy - gr); ctx.lineTo(gcx, gcy + gr); ctx.stroke();
+          ctx.fillStyle = "#5cd2ff";
+          ctx.beginPath(); ctx.arc(gcx + cl(m.x / rmax.x) * gr, gcy + cl(m.y / rmax.y) * gr, H * 0.018, 0, 7); ctx.fill();
+          ctx.textAlign = "center"; ctx.font = `${Math.round(fs * 0.82)}px ui-sans-serif, system-ui, sans-serif`;
+          ctx.fillStyle = "rgba(255,255,255,0.72)"; ctx.fillText("G  lat/vert", gcx, gcy + gr + 5); ctx.textAlign = "left";
+        }
+        // legend
+        ctx.font = `${fs}px ui-sans-serif, system-ui, sans-serif`;
+        const legend = "race HUD · speedometer = forward speed (green→red) · wheel = steering (yaw) · G-meter = lateral/vertical · horizon = pitch/roll";
         ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(6, 6, ctx.measureText(legend).width + 14, fs + 10);
         ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.fillText(legend, 13, 11);
-        // 6-DOF gauge panel (top-right): every component, bipolar bar + live value
-        const G = [["fwd  z", m.z, rmax.z, 30], ["lat  x", m.x, rmax.x, 18], ["up   y", m.y, rmax.y, 50],
-                   ["yaw", m.yaw, rmax.yaw, 200], ["pitch", m.pitch, rmax.pitch, 175], ["roll", m.roll, rmax.roll, 270]];
-        const rowh = fs + 8, gw = Math.min(W * 0.4, 232), px = W - gw - 8, py = 8 + fs + 14;
-        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(px - 6, py - 5, gw + 12, rowh * 6 + 10);
-        const barX = px + 52, barW = gw - 112, cxg = barX + barW / 2;
-        G.forEach(([lab, val, rng, h], k) => {
-          const yk = py + k * rowh;
-          ctx.fillStyle = "rgba(230,230,235,0.9)"; ctx.fillText(lab, px, yk);
-          ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 1;
-          ctx.beginPath(); ctx.moveTo(cxg, yk + 1); ctx.lineTo(cxg, yk + fs - 1); ctx.stroke();   // zero line
-          const w = Math.max(-1, Math.min(1, val / rng)) * (barW / 2);
-          ctx.fillStyle = `hsl(${h} 75% 55%)`; ctx.fillRect(Math.min(cxg, cxg + w), yk + 2, Math.abs(w), fs - 4);
-          ctx.fillStyle = "rgba(230,230,235,0.85)"; ctx.fillText(val.toFixed(3), barX + barW + 8, yk);
-        });
         if (fr !== fcur) setFcur(fr);
       }
       raf = requestAnimationFrame(draw);
@@ -123,7 +141,7 @@ function EgoMotionOverlay({ action, videoUrl, fps }) {
   return (
     <div className="trajectory">
       <div className="traj-head">
-        <span className="traj-title">Recovered ego-motion on the clip</span>
+        <span className="traj-title">Recovered ego-motion · race-car HUD</span>
         <span className="traj-meta">frame {fcur}/{n - 1}</span>
       </div>
       <div className="ego-wrap">
@@ -131,9 +149,9 @@ function EgoMotionOverlay({ action, videoUrl, fps }) {
         <canvas ref={cref} className="ego-ov" />
       </div>
       <div className="traj-cap">
-        All 6 DOF are shown live: the <b>arrow</b> = forward speed (length) + steering/yaw (tilt), color = speed;
-        the <b>gauge panel</b> = translation <b>z,x,y</b> + rotation <b>yaw,pitch,roll</b> (decoded from rot6d), each a
-        signed bar around zero. The faint line is the roll'd horizon.
+        Driver's-eye HUD of the recovered motion: <b>speedometer</b> = forward speed (z, dial color green→red),
+        <b>steering wheel</b> = yaw, <b>G-meter</b> = lateral (x) / vertical (y), <b>artificial horizon</b> = pitch + roll.
+        Rotation is decoded from the rot6d block. Plays in sync with the clip.
       </div>
     </div>
   );
