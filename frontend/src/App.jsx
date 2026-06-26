@@ -58,7 +58,12 @@ function ActionTrajectory({ action, title }) {
   }, [rows, cols]);
 
   const SW = 150, SH = 38, sp = 3;
-  const hue = (j) => Math.round((j / Math.max(1, cols)) * 310);
+  // Cosmos canonical 9-D action = translation(3) + rot6d(6) (action_spec.py: Pos()+Rot("rot6d")).
+  const isPose = cols === 9;
+  const POSE_LBL = ["x", "y", "z", "R₀", "R₁", "R₂", "R₃", "R₄", "R₅"];
+  const label = (j) => (isPose ? POSE_LBL[j] : `d${j}`);
+  // Translation = warm hues, rotation = cool hues, so the two blocks read apart at a glance.
+  const hue = (j) => (isPose ? (j < 3 ? 20 + j * 14 : 165 + (j - 3) * 28) : Math.round((j / Math.max(1, cols)) * 310));
   const norm = (v, j) => (Number(v) - stats.mn[j]) / Math.max(1e-9, stats.mx[j] - stats.mn[j]);
   const sparkPts = (j) => rows.map((r, i) => {
     const x = sp + (i / Math.max(1, n - 1)) * (SW - 2 * sp);
@@ -95,7 +100,7 @@ function ActionTrajectory({ action, title }) {
         {Array.from({ length: cols }, (_, j) => (
           <div className="traj-cell" key={j}>
             <div className="traj-cell-head">
-              <span className="traj-dot" style={{ background: `hsl(${hue(j)} 70% 55%)` }} />d{j}
+              <span className="traj-dot" style={{ background: `hsl(${hue(j)} 70% 55%)` }} />{label(j)}
               <span className="traj-cell-val">{Number(cur[j] ?? 0).toFixed(3)}</span>
             </div>
             <svg className="traj-spark" viewBox={`0 0 ${SW} ${SH}`} preserveAspectRatio="none">
@@ -119,6 +124,12 @@ function ActionTrajectory({ action, title }) {
       </div>
 
       <div className="traj-cap">{cols} action dims × {n} steps · ▶ sweeps the cursor across every channel · heatmap: rows = dims, columns = time</div>
+      {isPose && (
+        <div className="traj-legend">
+          <b style={{ color: "hsl(27 70% 60%)" }}>x y z</b> = relative translation (per frame) ·{" "}
+          <b style={{ color: "hsl(200 70% 62%)" }}>R₀…R₅</b> = rotation as rot6d (first two columns of the 3×3 matrix; identity = 1,0,0, 0,1,0)
+        </div>
+      )}
       <div className="traj-foot"><a onClick={download}><IconDownload /> full trajectory (JSON)</a></div>
     </div>
   );
