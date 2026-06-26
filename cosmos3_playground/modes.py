@@ -64,14 +64,14 @@ _FD_NCHUNKS = int(_FD_SPEC.get("num_chunks", len(_FD_SPEC.get("action_chunks", [
 # ----------------------------------------------------------------------------- modes
 MODES: list[dict[str, Any]] = [
     # ---- GENERATE ----
-    {"id": "t2i", "label": "Text → Image", "surface": "generate", "group": "Imagine", "primary": True,
+    {"id": "t2i", "label": "Text → Image", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "image", "reference": "none", "blurb": "Generate a still image from a prompt.",
      "io": "Prompt → image", "key_knobs": ["size", "guidance_scale"],
      "example": {"prompt": "Photorealistic close-up of a brushed-titanium robotic hand with exposed servos "
                  "gently cradling a fresh dewy strawberry, soft window light, razor-sharp focus on the fruit's "
                  "seeds and the metal's micro-scratches, shallow depth of field, studio product photography",
                  "params": _IMAGE_DEFAULTS, "reference": None}},
-    {"id": "t2v", "label": "Text → Video", "surface": "generate", "group": "Imagine", "primary": True,
+    {"id": "t2v", "label": "Text → Video", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "video", "reference": "none", "blurb": "Imagine a video world from a prompt.",
      "io": "Prompt → video (with optional sound)", "key_knobs": ["size", "num_frames", "generate_sound"],
      "example": {"prompt": "A lone surfer drops into a towering turquoise wave at golden hour; the lip throws "
@@ -82,16 +82,17 @@ MODES: list[dict[str, Any]] = [
                  # sound defaults OFF: under a sequence-parallel (ulysses) deployment the
                  # video+sound token count must be a multiple of ulysses_degree, which fails for
                  # many frame counts. Video-only is always safe; sound is an opt-in toggle.
-                 "params": {**_VIDEO_DEFAULTS, "generate_sound": False, "negative_prompt": _NEG_VIDEO},
+                 # No negative_prompt → backend applies the paper B.6 structured negative prompt by default.
+                 "params": {**_VIDEO_DEFAULTS, "generate_sound": False},
                  "reference": None}},
-    {"id": "i2v", "label": "Image → Video", "surface": "generate", "group": "Animate", "primary": True,
+    {"id": "i2v", "label": "Image → Video", "surface": "generate", "group": "World Model", "primary": True,
      "kind": "video", "reference": "image", "blurb": "Animate a still image into a video.",
      "io": "Image + prompt → video", "key_knobs": ["num_frames"],
      "example": {"prompt": "Bring the waterfall to life: water cascades over the rock face and splashes into the "
                  "pool, the stream ripples over the mossy stones, ferns sway gently, fine mist drifts — natural, "
                  "physically consistent motion, photorealistic.",
-                 "params": {**_VIDEO_DEFAULTS, "negative_prompt": _NEG_VIDEO}, "reference": "i2v_input.jpg"}},
-    {"id": "v2v", "label": "Video → Video", "surface": "generate", "group": "Edit",
+                 "params": {**_VIDEO_DEFAULTS}, "reference": "i2v_input.jpg"}},
+    {"id": "v2v", "label": "Video → Video", "surface": "generate", "group": "World Model",
      "kind": "video", "reference": "video", "blurb": "Future prediction: keep the opening frames, generate what happens next.",
      "io": "Video (opening frames) + prompt → continuation", "key_knobs": ["num_frames"],
      "purpose": "Predict the future of a clip — the model locks your opening frames as ground truth and "
@@ -104,14 +105,13 @@ MODES: list[dict[str, Any]] = [
                 "options": ["first", "last"], "default": "first",
                 "optionLabels": {"first": "predict from start", "last": "extend past end"},
                 "hint": "Conditions on only ~5 frames (2 latent) — a short clip is enough; no need for a long video."}],
-     "example": {"prompt": "A white robotic arm with black joints continues pouring a transparent liquid from a "
-                 "light-green pitcher into a glass holding a reddish-brown liquid and a spoon, on a clean white "
-                 "tabletop; the pour proceeds smoothly and the glass fills to a higher level, the gripper keeping "
-                 "the pitcher steady. Physically consistent motion, bright soft lighting, photorealistic.",
-                 "params": {**_VIDEO_DEFAULTS, "size": "1280x720", "num_frames": 93, "fps": 24,
-                            "condition_video_keep": "first", "negative_prompt": _NEG_VIDEO},
-                 "reference": "v2v_robot_pour.mp4"}},
-    {"id": "transfer", "label": "Transfer · Sim→Real", "surface": "generate", "group": "Edit",
+     "example": {"prompt": "A robotic arm continues its manipulation task over the white plate, the gripper moving "
+                 "smoothly along a deliberate trajectory to handle the food and then retracting. Physically "
+                 "consistent motion, the scene and tableware stay stable, bright soft lighting, photorealistic.",
+                 "params": {**_VIDEO_DEFAULTS, "size": "1280x720", "num_frames": 121, "fps": 24,
+                            "condition_video_keep": "first"},
+                 "reference": "ref_video.mp4"}},
+    {"id": "transfer", "label": "Transfer · Sim→Real", "surface": "generate", "group": "Sim2Real (SDG)",
      "kind": "video", "reference": "video", "blurb": "Sim-to-real: turn a simulated / CG clip into a photorealistic video, keeping exact geometry & motion.",
      "io": "Sim (or control) clip + prompt → photorealistic video", "key_knobs": [],
      # length + aspect ratio are derived from the control clip automatically — not user knobs;
@@ -144,9 +144,9 @@ MODES: list[dict[str, Any]] = [
                  "preparing to slice the tomato with a knife that's not yet visible, maintaining the exact spatial "
                  "arrangement and camera angle of the original simulation.",
                  "params": {**_VIDEO_DEFAULTS, "size": "1280x720", "control": "edge", "control_guidance": 1.5,
-                            "guidance_scale": 3.0, "negative_prompt": _NEG_VIDEO},
+                            "guidance_scale": 3.0},
                  "reference": "transfer_sim_robot.mp4"}},
-    {"id": "fwd_dynamics", "label": "Forward dynamics", "surface": "generate", "group": "Simulate",
+    {"id": "fwd_dynamics", "label": "Forward dynamics", "surface": "generate", "group": "Robotics", "action": True,
      "kind": "video", "reference": "image", "blurb": "Action-conditioned future prediction: roll out a video "
      "from a first frame + an action trajectory.", "chunk_size": _FD_CHUNK,
      "io": "First frame + action trajectory → video", "key_knobs": [],
@@ -163,7 +163,7 @@ MODES: list[dict[str, Any]] = [
                  "physically consistent contact and object motion.",
                  "params": {**_ACTION_DEFAULTS, "size": "960x960", "rollout_chunks": 4},
                  "reference": "fd_first_frame.png", "action": "fd_action_chunks.json"}},
-    {"id": "inv_dynamics", "label": "Inverse dynamics", "surface": "generate", "group": "Simulate",
+    {"id": "inv_dynamics", "label": "Inverse dynamics", "surface": "generate", "group": "Autonomous Driving", "action": True,
      "kind": "video", "reference": "video", "blurb": "Recover the ego-motion / action trajectory from a video.",
      "io": "Video → action trajectory (numbers, not a clip)", "key_knobs": [],
      # The model's real output here is the action tensor, not a clip — tell the UI to surface the
@@ -173,7 +173,7 @@ MODES: list[dict[str, Any]] = [
                  "translation and rotation through the scene, frame by frame. The output is a 60×9 action "
                  "trajectory, not a video.",
                  "params": {**_ACTION_DEFAULTS, "num_frames": 61}, "reference": "id_av_input.mp4"}},
-    {"id": "policy", "label": "Policy", "surface": "generate", "group": "Simulate",
+    {"id": "policy", "label": "Policy", "surface": "generate", "group": "Robotics", "action": True,
      "kind": "video", "reference": "image", "blurb": "Instruction-driven rollout: the model predicts its own "
      "actions from a first frame + a language goal, and rolls out the video.", "chunk_size": _FD_CHUNK,
      "io": "First frame + instruction → predicted actions + video",

@@ -550,7 +550,7 @@ export default function App() {
   // Fetch the action plan that drives action modes (forward dynamics) for visualization.
   useEffect(() => {
     setActionPlan(null);
-    if (mode?.group === "Simulate" && mode?.reference === "image") {
+    if (mode?.action && mode?.reference === "image") {
       exampleAction(modeId).then(setActionPlan).catch(() => setActionPlan(null));
     }
   }, [modeId, mode]);
@@ -598,8 +598,8 @@ export default function App() {
   const knobs = useMemo(() => {
     if (!config || !mode) return [];
     const list = isReason ? config.reason_knobs : config.gen_knobs;
-    // Simulate modes derive num_frames from the action chunk — not a free knob.
-    const actionMode = mode.group === "Simulate";
+    // Action modes derive num_frames from the action chunk — not a free knob.
+    const actionMode = !!mode.action;
     return list.filter((k) => {
       if (k.video && mode.kind !== "video") return false;
       if (actionMode && k.key === "num_frames") return false;
@@ -712,10 +712,13 @@ export default function App() {
   if (!config) return <div className="loading">Loading…</div>;
 
   const surfaceModes = config.modes.filter((m) => m.surface === surface && (!simple || SIMPLE_TASKS.has(m.id)));
-  const primaryModes = surfaceModes.filter((m) => m.primary);
-  const moreModes = simple ? [] : surfaceModes.filter((m) => !m.primary);
+  // Generate (Advanced) is organized by downstream scenario: every task lives under
+  // its scenario group, all groups shown at once (no primary-flat row, no collapse).
+  const scenarioNav = surface === "generate" && !simple;
+  const primaryModes = scenarioNav ? [] : surfaceModes.filter((m) => m.primary);
+  const moreModes = simple ? [] : (scenarioNav ? surfaceModes : surfaceModes.filter((m) => !m.primary));
   const moreGroups = [...new Set(moreModes.map((m) => m.group))];
-  const moreOpen = showMore || moreModes.some((m) => m.id === modeId);
+  const moreOpen = scenarioNav ? true : (showMore || moreModes.some((m) => m.id === modeId));
   // forward dynamics derives its frame count from the rollout selection (chunk_size · n + 1).
   const frames = mode?.id === "fwd_dynamics"
     ? (mode.chunk_size || 16) * (Number(params.rollout_chunks) || 1) + 1
@@ -828,7 +831,7 @@ export default function App() {
                   <button key={m.id} className={"tab" + (m.id === modeId ? " active" : "")}
                     onClick={() => setModeId(m.id)} title={m.blurb}>{m.label}</button>
                 ))}
-                {moreModes.length > 0 && (
+                {moreModes.length > 0 && !scenarioNav && (
                   <button type="button" className="more-toggle" aria-expanded={moreOpen}
                     onClick={() => setShowMore((v) => !v)}>
                     <span className={"chev" + (moreOpen ? " open" : "")}><IconChevron /></span>
