@@ -704,7 +704,9 @@ function InputStrip({ mode, refUrl, actionPlan, params }) {
           ? <video className="io-thumb" src={refUrl} muted loop autoPlay />
           : <img className="io-thumb" src={refUrl} alt="input" />)}
         {actionPlan?.data?.length > 0 && (
-          <div className="io-thumb io-action-chip">action plan · {actionPlan.shape?.join("×")}</div>
+          <div className="io-thumb io-action">
+            <ActionTrajectory action={{ shape: actionPlan.shape, data: actionPlan.data, dtype: `${actionPlan.fps || ""} fps`, action_mode: "action plan", domain_id: actionPlan.domain?.domain_id }} />
+          </div>
         )}
         <span className="io-arrow">▸</span>
       </div>
@@ -1061,13 +1063,20 @@ export default function App() {
             const actionOut = result?.action?.action_mode === "inverse_dynamics";
             return (<>
               {result?.kind === "image" && result.src && <img className="media" src={result.src} alt="result" />}
-              {result?.kind === "video" && result.src && !actionOut && <video className="media" src={result.src} controls autoPlay loop />}
-              {result?.kind === "text" && <div className="answer"><Markdown text={result.text} /></div>}
-              {/* Inverse dynamics: the recovered ego-motion is meaningful, shown as the on-clip HUD.
-                  Forward/policy raw action dims aren't interpretable, so no action-trajectory plot. */}
-              {actionOut && result?.action && refUrl && (
-                <EgoMotionOverlay action={result.action} videoUrl={refUrl} fps={Number(params.fps) || 10} />
+              {result?.kind === "video" && result.src && !actionOut && !result?.action && <video className="media" src={result.src} controls autoPlay loop />}
+              {result?.kind === "video" && result.src && !actionOut && result?.action && (
+                <ActionPlanOverlay action={result.action} videoUrl={result.src} fps={Number(params.fps) || 10} />
               )}
+              {result?.kind === "text" && <div className="answer"><Markdown text={result.text} /></div>}
+              {actionOut && result?.action && (<>
+                {refUrl && <EgoMotionOverlay action={result.action} videoUrl={refUrl} fps={Number(params.fps) || 10} />}
+                <ActionTrajectory action={result.action} />
+              </>)}
+              {result?.action && !actionOut && (<>
+                <div className="action-box"><b>action</b> · mode={result.action.action_mode} · shape={JSON.stringify(result.action.shape)} · dtype={result.action.dtype} · domain={result.action.domain_id}</div>
+                <ActionTrajectory action={result.action}
+                  title={result.action.action_mode === "policy" ? "Predicted action trajectory (model output)" : undefined} />
+              </>)}
               {result?.profiling?.inference_time_s != null && (
                 <div className="profiling">
                   {result.profiling.inference_time_s?.toFixed?.(1)}s
@@ -1259,7 +1268,12 @@ export default function App() {
               )}
               {actionPlan?.data?.length > 0 && (
                 <div className="pipe-stage">
-                  <div className="pipe-label">Action plan — drives the simulation ({actionPlan.num_chunks} chunks × {actionPlan.action_chunk_size} steps · {actionPlan.shape?.join("×")})</div>
+                  <div className="pipe-label">Action plan — drives the simulation ({actionPlan.num_chunks} chunks × {actionPlan.action_chunk_size} steps)</div>
+                  <ActionTrajectory title="Action plan (input — drives the generated video)" action={{
+                    shape: actionPlan.shape, data: actionPlan.data,
+                    dtype: actionPlan.fps ? `${actionPlan.fps} fps` : "input",
+                    action_mode: "input plan", domain_id: actionPlan.domain?.domain_id,
+                  }} />
                 </div>
               )}
               {!preview && <div className="pipe-empty">building request preview…</div>}
